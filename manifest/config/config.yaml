@@ -1,0 +1,105 @@
+server:
+  address: ":8090"
+  name: "wisesentinel-platform"
+  openapiPath: "/api.json"
+  swaggerPath: "/swagger"
+
+logger:
+  level: "info"
+  stdout: true
+
+database:
+  default:
+    link: "mysql:ws:ws123@tcp(127.0.0.1:3306)/wisesentinel?charset=utf8mb4&parseTime=True&loc=Local"
+    debug: false
+
+redis:
+  default:
+    address: "127.0.0.1:6379"
+    db: 0
+
+auth:
+  jwt_secret: "change-me-in-production"
+  jwt_expire_hours: 24
+  dev_api_key: "ws-dev-key"
+  dev_password: "dev123"
+
+milvus:
+  address: "127.0.0.1:19530"
+  db: "agent"
+  collection: "biz"
+  username: ""
+  password: ""
+
+storage:
+  type: "local"
+  local:
+    base_dir: "/data/wisesentinel/docs"
+
+models:
+  profiles:
+    chat_fast:
+      provider: openai_compatible
+      model: "deepseek-v3"
+      api_key: ""
+      base_url: ""
+    ops_plan:
+      provider: openai_compatible
+      model: "deepseek-v3"
+      api_key: ""
+      base_url: ""
+    ops_exec:
+      provider: openai_compatible
+      model: "deepseek-v3"
+      api_key: ""
+      base_url: ""
+    embedding_default:
+      provider: dashscope
+      model: "text-embedding-v4"
+      api_key: ""
+      dimensions: 2048
+
+prometheus:
+  base_url: "http://127.0.0.1:9090"
+
+mcp:
+  log:
+    url: ""
+
+session:
+  max_window_size: 6
+  ttl_days: 7
+
+rate_limit:
+  chat_per_minute: 30
+  ops_per_minute: 5
+
+tenant:
+  default_id: "default"
+
+tenant_overrides:
+  default:
+    log_region: "ap-guangzhou"
+    log_topic_id: ""
+
+tools:
+  - name: query_prometheus_alerts
+    risk_level: L0
+    enabled: true
+    timeout_ms: 10000
+    agents: [chat, ops]
+  - name: query_internal_docs
+    risk_level: L0
+    enabled: true
+    timeout_ms: 15000
+    agents: [chat, ops]
+  - name: get_current_time
+    risk_level: L0
+    enabled: true
+    timeout_ms: 1000
+    agents: [chat, ops]
+  - name: query_logs
+    risk_level: L1
+    enabled: true
+    timeout_ms: 30000
+    agents: [chat, ops]

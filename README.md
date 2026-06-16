@@ -4,7 +4,7 @@
 
 ## M1 里程碑（当前）
 
-- 可启动的 GoFrame 服务（`:8080`）
+- 可启动的 GoFrame 服务（`:8090`）
 - Gateway 中间件链：Recovery / Trace / CORS / Tenant / JWT+API Key / RBAC / RateLimit / Audit
 - MySQL DDL、Redis、Milvus 配置化客户端
 - Health（`/health/live`、`/health/ready`）与 Metrics（`/metrics`）
@@ -31,15 +31,15 @@ go run ./cmd/platform
 
 ```bash
 # 存活探针
-curl http://127.0.0.1:8080/health/live
+curl http://127.0.0.1:8090/health/live
 
 # 获取开发 Token
-curl -X POST http://127.0.0.1:8080/api/v1/auth/token \
+curl -X POST http://127.0.0.1:8090/api/v1/auth/token \
   -H 'Content-Type: application/json' \
   -d '{"username":"sre@example.com","password":"dev123"}'
 
 # 带 JWT 调用 Ping
-curl http://127.0.0.1:8080/api/v1/ping \
+curl http://127.0.0.1:8090/api/v1/ping \
   -H "Authorization: Bearer <token>"
 ```
 
