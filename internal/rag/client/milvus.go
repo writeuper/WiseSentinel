@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"wisesentinel-platform/internal/pkg/configx"
+
 	"github.com/gogf/gf/v2/frame/g"
 	milvus "github.com/milvus-io/milvus-sdk-go/v2/client"
 	"github.com/milvus-io/milvus-sdk-go/v2/entity"
@@ -34,8 +36,12 @@ type Config struct {
 
 // LoadConfig reads Milvus settings from GoFrame config.
 func LoadConfig(ctx context.Context) Config {
+	address := configx.String(ctx, "milvus.address", "MILVUS_ADDRESS")
+	if address == "" {
+		address = "127.0.0.1:19530"
+	}
 	cfg := Config{
-		Address:    g.Cfg().MustGet(ctx, "milvus.address", "127.0.0.1:19530").String(),
+		Address:    address,
 		DBName:     g.Cfg().MustGet(ctx, "milvus.db", defaultDB).String(),
 		Collection: g.Cfg().MustGet(ctx, "milvus.collection", defaultCollection).String(),
 		Username:   g.Cfg().MustGet(ctx, "milvus.username", "").String(),

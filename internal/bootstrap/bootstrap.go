@@ -18,6 +18,8 @@ type App struct {
 
 // Init wires database, cache, and vector store clients.
 func Init(ctx context.Context) (*App, error) {
+	applyConfigFromEnv(ctx)
+
 	if err := pingMySQL(ctx); err != nil {
 		g.Log().Warning(ctx, "MySQL not ready:", err)
 	}

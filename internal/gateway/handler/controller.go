@@ -9,6 +9,7 @@ import (
 	"wisesentinel-platform/internal/domain"
 	"wisesentinel-platform/internal/gateway/auth"
 	"wisesentinel-platform/internal/pkg/apperr"
+	"wisesentinel-platform/internal/pkg/configx"
 	"wisesentinel-platform/internal/pkg/ctxkeys"
 
 	"github.com/gogf/gf/v2/frame/g"
@@ -26,7 +27,10 @@ func NewV1(app *bootstrap.App) *ControllerV1 {
 
 // AuthToken issues a JWT for development and integration testing.
 func (c *ControllerV1) AuthToken(ctx context.Context, req *v1.AuthTokenReq) (*v1.AuthTokenRes, error) {
-	devPassword := g.Cfg().MustGet(ctx, "auth.dev_password", "dev123").String()
+	devPassword := configx.String(ctx, "auth.dev_password", "DEV_PASSWORD")
+	if devPassword == "" {
+		devPassword = "dev123"
+	}
 	if req.Password != devPassword {
 		return nil, apperr.ErrUnauthorized
 	}

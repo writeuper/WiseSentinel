@@ -8,6 +8,7 @@ import (
 	_ "github.com/gogf/gf/contrib/nosql/redis/v2"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gctx"
+	"github.com/gogf/gf/v2/os/gsession"
 )
 
 func main() {
@@ -22,6 +23,7 @@ func main() {
 	}
 
 	s := g.Server()
+	s.SetSessionStorage(gsession.NewStorageMemory())
 	gateway.Register(s, app)
 	s.Run()
 }

@@ -6,6 +6,7 @@ import (
 
 	"wisesentinel-platform/internal/gateway/auth"
 	"wisesentinel-platform/internal/pkg/apperr"
+	"wisesentinel-platform/internal/pkg/configx"
 	"wisesentinel-platform/internal/pkg/ctxkeys"
 
 	"github.com/gogf/gf/v2/frame/g"
@@ -23,7 +24,7 @@ func Auth(r *ghttp.Request) {
 	token := extractBearerToken(r)
 	if token == "" {
 		apiKey := strings.TrimSpace(r.Header.Get("X-API-Key"))
-		devKey := g.Cfg().MustGet(ctx, "auth.dev_api_key", "").String()
+		devKey := configx.String(ctx, "auth.dev_api_key", "DEV_API_KEY")
 		if apiKey != "" && devKey != "" && apiKey == devKey {
 			ctx = ctxkeys.WithUserID(ctx, "dev_api_user")
 			ctx = ctxkeys.WithRoles(ctx, []string{"operator"})

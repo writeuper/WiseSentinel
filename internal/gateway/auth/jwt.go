@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"wisesentinel-platform/internal/domain"
+	"wisesentinel-platform/internal/pkg/configx"
 
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/golang-jwt/jwt/v5"
@@ -24,7 +25,7 @@ func IssueToken(ctx context.Context, userID string, roles []string, tenantID str
 		tenantID = domain.DefaultTenantID
 	}
 	expireHours := g.Cfg().MustGet(ctx, "auth.jwt_expire_hours", 24).Int()
-	secret := g.Cfg().MustGet(ctx, "auth.jwt_secret").String()
+	secret := configx.String(ctx, "auth.jwt_secret", "JWT_SECRET")
 	if secret == "" {
 		return "", 0, fmt.Errorf("auth.jwt_secret is required")
 	}
@@ -50,7 +51,7 @@ func IssueToken(ctx context.Context, userID string, roles []string, tenantID str
 
 // ParseToken validates and parses a JWT string.
 func ParseToken(ctx context.Context, tokenString string) (*Claims, error) {
-	secret := g.Cfg().MustGet(ctx, "auth.jwt_secret").String()
+	secret := configx.String(ctx, "auth.jwt_secret", "JWT_SECRET")
 	if secret == "" {
 		return nil, fmt.Errorf("auth.jwt_secret is required")
 	}

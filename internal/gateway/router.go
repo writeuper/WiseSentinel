@@ -12,6 +12,7 @@ import (
 // Register wires HTTP routes and middleware for the platform API.
 func Register(s *ghttp.Server, app *bootstrap.App) {
 	metrics.Register(s)
+	s.Use(metrics.HTTPMetrics)
 	handler.RegisterHealth(s, app)
 
 	s.Group("/", func(group *ghttp.RouterGroup) {

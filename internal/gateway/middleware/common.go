@@ -27,6 +27,7 @@ func Recovery(r *ghttp.Request) {
 }
 
 // Trace injects or propagates X-Trace-ID.
+// M1 uses lightweight request correlation; OpenTelemetry spans are planned for M3+.
 func Trace(r *ghttp.Request) {
 	traceID := strings.TrimSpace(r.Header.Get("X-Trace-ID"))
 	if traceID == "" {
