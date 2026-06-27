@@ -77,26 +77,6 @@ func (c *ControllerV1) ChatStream(ctx context.Context, req *v1.ChatStreamReq) (*
 	return nil, notImplemented("chat stream")
 }
 
-// UploadDocument knowledge upload placeholder.
-func (c *ControllerV1) UploadDocument(ctx context.Context, req *v1.UploadDocumentReq) (*v1.UploadDocumentRes, error) {
-	return nil, notImplemented("knowledge")
-}
-
-// ListDocuments lists documents placeholder.
-func (c *ControllerV1) ListDocuments(ctx context.Context, req *v1.ListDocumentsReq) (*v1.ListDocumentsRes, error) {
-	return nil, notImplemented("knowledge")
-}
-
-// DeleteDocument deletes document placeholder.
-func (c *ControllerV1) DeleteDocument(ctx context.Context, req *v1.DeleteDocumentReq) (*v1.DeleteDocumentRes, error) {
-	return nil, notImplemented("knowledge")
-}
-
-// GetIndexTask returns index task placeholder.
-func (c *ControllerV1) GetIndexTask(ctx context.Context, req *v1.GetIndexTaskReq) (*v1.GetIndexTaskRes, error) {
-	return nil, notImplemented("knowledge")
-}
-
 // OpsAnalyze ops analysis placeholder.
 func (c *ControllerV1) OpsAnalyze(ctx context.Context, req *v1.OpsAnalyzeReq) (*v1.OpsAnalyzeRes, error) {
 	return nil, notImplemented("ops agent")
@@ -140,7 +120,7 @@ func notImplemented(feature string) error {
 func (c *ControllerV1) Ping(ctx context.Context, _ *v1.PingReq) (v1.PingRes, error) {
 	return v1.PingRes{
 		"name":     g.Cfg().MustGet(ctx, "server.name", "wisesentinel-platform").String(),
-		"version":  "m1",
+		"version":  "m2",
 		"trace_id": ctxkeys.TraceIDFrom(ctx),
 		"time":     time.Now().UTC().Format(time.RFC3339),
 	}, nil

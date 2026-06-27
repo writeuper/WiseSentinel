@@ -65,6 +65,7 @@ type RAGService interface {
 	Retrieve(ctx context.Context, req *RetrieveRequest) (*RetrieveResponse, error)
 	SubmitIndexTask(ctx context.Context, req *IndexTaskRequest) (taskID string, err error)
 	GetIndexTask(ctx context.Context, tenantID, taskID string) (*IndexTask, error)
+	DeleteDocumentChunks(ctx context.Context, docID string) error
 }
 
 // ToolMeta describes a registered tool.

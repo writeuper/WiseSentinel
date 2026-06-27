@@ -14,7 +14,8 @@ import (
 const (
 	defaultDB         = "agent"
 	defaultCollection = "biz"
-	vectorDim         = 2048
+	VectorDim         = 2048
+	vectorDim         = VectorDim
 )
 
 // MilvusClient wraps the Milvus SDK with WiseSentinel schema conventions.

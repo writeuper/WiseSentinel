@@ -1,12 +1,16 @@
 package v1
 
-import "github.com/gogf/gf/v2/frame/g"
+import (
+	"github.com/gogf/gf/v2/frame/g"
+	"github.com/gogf/gf/v2/net/ghttp"
+)
 
 // UploadDocumentReq uploads a knowledge document.
 type UploadDocumentReq struct {
 	g.Meta      `path:"/knowledge/documents/upload" method:"post" mime:"multipart/form-data" tags:"Knowledge" summary:"上传文档并索引"`
-	Visibility  string `json:"visibility" d:"tenant"`
-	SecretLevel int    `json:"secret_level" d:"1"`
+	File        *ghttp.UploadFile `json:"file" type:"file" v:"required#请上传文件"`
+	Visibility  string            `json:"visibility" d:"tenant"`
+	SecretLevel int               `json:"secret_level" d:"1"`
 }
 
 // UploadDocumentRes returns upload and index task info.

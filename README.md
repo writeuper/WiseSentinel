@@ -2,7 +2,14 @@
 
 智哨（WiseSentinel）企业级智能运维 Agent 平台 — Phase 1 模块化单体。
 
-## M1 里程碑（当前）
+## M2 里程碑（当前）
+
+- RAG Engine：DashScope Embedding（无密钥时回退 HashEmbedder）+ Milvus 索引/检索
+- Knowledge 上传 API：文档存储、同步索引、`ws_document` / `ws_index_task` 落库
+- 增量索引：按 `_source` / `doc_id` 删除旧向量后重建
+- 租户过滤检索：`metadata["tenant_id"]` + `visibility`
+
+## M1 里程碑
 
 - 可启动的 GoFrame 服务（`:8090`）
 - Gateway 中间件链：Recovery / Trace / CORS / Tenant / JWT+API Key / RBAC / RateLimit / Audit
@@ -94,7 +101,42 @@ M1 阶段使用轻量级 `X-Trace-ID` 请求关联（Gateway 中间件注入/透
 
 | 里程碑 | 内容 |
 |--------|------|
-| M2 | RAG + Knowledge 索引闭环 |
 | M3 | Chat Agent + Redis 会话 |
 | M4 | Ops Agent + Prometheus |
 | M5 | Portal + E2E 验收 |
+
+### M2 知识库验证
+
+```bash
+
+# 模拟获取token
+TOKEN=$(curl -s -X POST http://127.0.0.1:8090/api/v1/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"sre@example.com","password":"dev123"}' \
+  | jq -r '.data.access_token')
+
+echo $TOKEN
+
+curl -X POST http://127.0.0.1:8090/api/v1/knowledge/documents/upload \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "file=@testdata/knowledge/alert_runbook.md"
+  
+# 获取 Token 后上传 Runbook
+curl -X POST http://127.0.0.1:8090/api/v1/knowledge/documents/upload \
+  -H "Authorization: Bearer <token>" \
+  -F "file=@testdata/knowledge/alert_runbook.md"
+
+# 查询索引任务
+curl http://127.0.0.1:8090/api/v1/knowledge/index-tasks/<task_id> \
+  -H "Authorization: Bearer <token>"
+
+# 文档列表
+curl http://127.0.0.1:8090/api/v1/knowledge/documents \
+  -H "Authorization: Bearer <token>"
+```
+
+集成测试（需 Milvus）：
+
+```bash
+GF_GCFG_PATH=manifest/config go test -tags=integration ./internal/rag/ -run TestRAGIndexRetrieveLoop -v
+```
