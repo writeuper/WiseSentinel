@@ -17,3 +17,6 @@
 *.swo
 
 /data/
+/portal/node_modules/
+/portal/dist/
+/portal/tsconfig.tsbuildinfo

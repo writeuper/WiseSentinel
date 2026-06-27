@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>智哨 WiseSentinel — Portal 原型</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --primary: #2563EB;
+      --primary-hover: #1D4ED8;
+      --accent: #06B6D4;
+      --bg-page: #F8FAFC;
+      --bg-surface: #FFFFFF;
+      --bg-sidebar: #0F172A;
+      --bg-sidebar-hover: #1E293B;
+      --text-primary: #0F172A;
+      --text-secondary: #64748B;
+      --text-inverse: #F8FAFC;
+      --border: #E2E8F0;
+      --success: #10B981;
+      --warning: #F59E0B;
+      --error: #EF4444;
+      --info: #3B82F6;
+      --user-bubble: #EFF6FF;
+      --radius: 12px;
+      --sidebar-w: 260px;
+      --font: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --mono: "JetBrains Mono", monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg-page);
+      color: var(--text-primary);
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    /* ── Login ── */
+    #view-login {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #0F172A 0%, #1E3A5F 50%, #0F172A 100%);
+    }
+
+    .login-card {
+      width: 420px;
+      background: var(--bg-surface);
+      border-radius: 16px;
+      padding: 40px;
+      box-shadow: 0 24px 48px rgba(0,0,0,0.25);
+    }
+
+    .logo-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .logo-icon {
+      width: 44px;
+      height: 44px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+    }
+
+    .logo-text { font-size: 22px; font-weight: 700; }
+    .logo-sub { color: var(--text-secondary); font-size: 13px; margin-bottom: 28px; }
+
+    .field { margin-bottom: 16px; }
+    .field label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; }
+    .field input {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      outline: none;
+    }
+    .field input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.15); }
+
+    .btn-primary {
+      width: 100%;
+      padding: 12px;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+    .btn-primary:hover { background: var(--primary-hover); }
+
+    .sso-hint {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    /* ── App Shell ── */
+    #view-app { display: none; min-height: 100vh; }
+
+    .app-shell {
+      display: flex;
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      width: var(--sidebar-w);
+      background: var(--bg-sidebar);
+      color: var(--text-inverse);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    .sidebar-header {
+      padding: 20px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .sidebar-header .logo-row { margin-bottom: 0; }
+    .sidebar-header .logo-text { color: white; font-size: 18px; }
+
+    .btn-new-chat {
+      margin: 16px;
+      padding: 10px 14px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 8px;
+      color: white;
+      font-size: 14px;
+      cursor: pointer;
+      text-align: left;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn-new-chat:hover { background: var(--bg-sidebar-hover); }
+
+    .nav-section { padding: 8px 12px; flex: 1; overflow-y: auto; }
+
+    .nav-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #64748B;
+      padding: 8px 8px 4px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      color: #CBD5E1;
+      margin-bottom: 2px;
+    }
+    .nav-item:hover { background: var(--bg-sidebar-hover); color: white; }
+    .nav-item.active { background: rgba(37,99,235,0.25); color: white; }
+
+    .nav-badge {
+      margin-left: auto;
+      background: var(--warning);
+      color: #0F172A;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 10px;
+    }
+
+    .session-item {
+      padding: 8px 12px;
+      font-size: 13px;
+      color: #94A3B8;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .session-item:hover { background: var(--bg-sidebar-hover); color: white; }
+    .session-item.active { color: white; background: var(--bg-sidebar-hover); }
+
+    .sidebar-footer {
+      padding: 16px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .user-meta { flex: 1; min-width: 0; }
+    .user-name { font-size: 13px; font-weight: 500; }
+    .user-role { font-size: 11px; color: #64748B; }
+
+    /* Main */
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .topbar {
+      height: 56px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 0 24px;
+      gap: 16px;
+    }
+
+    .topbar-title { font-size: 16px; font-weight: 600; flex: 1; }
+
+    .chip {
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: #F1F5F9;
+      color: var(--text-secondary);
+      font-family: var(--mono);
+    }
+
+    .page { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+    .page.active { display: flex; }
+
+    /* Chat */
+    .chat-area {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .chat-inner { width: 100%; max-width: 768px; }
+
+    .welcome {
+      text-align: center;
+      padding: 60px 20px;
+    }
+    .welcome h2 { font-size: 24px; margin-bottom: 8px; }
+    .welcome p { color: var(--text-secondary); margin-bottom: 24px; }
+
+    .prompt-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+    }
+
+    .prompt-chip {
+      padding: 10px 16px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .prompt-chip:hover { border-color: var(--primary); color: var(--primary); }
+
+    .msg { margin-bottom: 20px; }
+    .msg-user { display: flex; justify-content: flex-end; }
+    .msg-user .bubble {
+      background: var(--user-bubble);
+      padding: 12px 16px;
+      border-radius: var(--radius);
+      max-width: 85%;
+      font-size: 14px;
+    }
+
+    .msg-ai .bubble {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      padding: 16px;
+      border-radius: var(--radius);
+      font-size: 14px;
+      max-width: 100%;
+    }
+
+    .citation {
+      margin-top: 12px;
+      padding: 10px 14px;
+      background: #F0FDF4;
+      border-left: 3px solid var(--success);
+      border-radius: 0 8px 8px 0;
+      font-size: 13px;
+    }
+    .citation-title { font-weight: 600; color: #166534; margin-bottom: 4px; }
+
+    .tool-call {
+      margin-top: 10px;
+      padding: 10px 14px;
+      background: #F8FAFC;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--mono);
+    }
+    .tool-ok { color: var(--success); }
+
+    .chat-input-bar {
+      padding: 16px 24px 24px;
+      background: var(--bg-page);
+      display: flex;
+      justify-content: center;
+    }
+
+    .input-wrap {
+      width: 100%;
+      max-width: 768px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow, 0 1px 3px rgba(15,23,42,0.08));
+      padding: 12px 16px;
+    }
+
+    .input-wrap textarea {
+      width: 100%;
+      border: none;
+      outline: none;
+      resize: none;
+      font-size: 14px;
+      font-family: var(--font);
+      min-height: 24px;
+    }
+
+    .input-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+    }
+
+    .toggles { display: flex; gap: 12px; font-size: 12px; color: var(--text-secondary); }
+    .toggle { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+    .toggle input { accent-color: var(--primary); }
+
+    .btn-send {
+      background: var(--primary);
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* Ops */
+    .ops-layout {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    .ops-panel {
+      width: 360px;
+      border-right: 1px solid var(--border);
+      padding: 24px;
+      background: var(--bg-surface);
+    }
+
+    .ops-panel h3 { font-size: 16px; margin-bottom: 16px; }
+    .ops-panel textarea {
+      width: 100%;
+      height: 120px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 13px;
+      resize: vertical;
+      margin-bottom: 16px;
+    }
+
+    .ops-report {
+      flex: 1;
+      padding: 24px;
+      overflow-y: auto;
+    }
+
+    .report-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .badge-success { background: #D1FAE5; color: #065F46; }
+    .badge-warning { background: #FEF3C7; color: #92400E; }
+
+    .timeline { margin-top: 16px; }
+    .timeline-item {
+      display: flex;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .timeline-num {
+      width: 24px;
+      height: 24px;
+      background: var(--primary);
+      color: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+
+    /* Knowledge */
+    .knowledge-page { flex: 1; padding: 24px; overflow-y: auto; }
+
+    .page-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    .upload-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 32px;
+      text-align: center;
+      color: var(--text-secondary);
+      margin-bottom: 24px;
+      background: var(--bg-surface);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--bg-surface);
+      border-radius: var(--radius);
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    th, td {
+      padding: 12px 16px;
+      text-align: left;
+      font-size: 13px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    th { background: #F8FAFC; font-weight: 600; color: var(--text-secondary); }
+    tr:last-child td { border-bottom: none; }
+
+    .btn-sm {
+      padding: 6px 12px;
+      font-size: 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: white;
+      cursor: pointer;
+      margin-right: 6px;
+    }
+    .btn-sm.primary { background: var(--primary); color: white; border-color: var(--primary); }
+
+    /* Approvals */
+    .approval-actions { display: flex; gap: 8px; }
+    .btn-approve { background: var(--success); color: white; border: none; }
+    .btn-reject { background: var(--error); color: white; border: none; }
+
+    /* Admin */
+    .config-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+    .config-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .config-card.active { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+
+    .proto-tag {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      background: #0F172A;
+      color: #94A3B8;
+      font-size: 11px;
+      padding: 6px 12px;
+      border-radius: 20px;
+      z-index: 100;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════ LOGIN ═══════════ -->
+<div id="view-login">
+  <div class="login-card">
+    <div class="logo-row">
+      <div class="logo-icon">🛡</div>
+      <div>
+        <div class="logo-text">智哨 WiseSentinel</div>
+      </div>
+    </div>
+    <div class="logo-sub">智守每一声告警，哨护每一次变更</div>
+    <div class="field">
+      <label>用户名</label>
+      <input type="text" value="sre@example.com" />
+    </div>
+    <div class="field">
+      <label>密码</label>
+      <input type="password" value="dev123" />
+    </div>
+    <button class="btn-primary" onclick="enterApp()">登录</button>
+    <div class="sso-hint">企业 SSO 登录（Phase 2）</div>
+  </div>
+</div>
+
+<!-- ═══════════ APP ═══════════ -->
+<div id="view-app">
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo-row">
+          <div class="logo-icon" style="width:32px;height:32px;font-size:16px">🛡</div>
+          <div class="logo-text">智哨</div>
+        </div>
+      </div>
+
+      <button class="btn-new-chat" onclick="showPage('chat')">＋ 新对话</button>
+
+      <div class="nav-section">
+        <div class="nav-label">功能</div>
+        <div class="nav-item active" data-page="chat" onclick="showPage('chat')">💬 对话</div>
+        <div class="nav-item" data-page="ops" onclick="showPage('ops')">🚨 告警分析</div>
+        <div class="nav-item" data-page="knowledge" onclick="showPage('knowledge')">📚 知识库</div>
+        <div class="nav-item" data-page="approvals" onclick="showPage('approvals')">🛡 审批中心 <span class="nav-badge">3</span></div>
+        <div class="nav-item" data-page="admin" onclick="showPage('admin')">⚙️ 管理</div>
+
+        <div class="nav-label" style="margin-top:16px">最近会话</div>
+        <div class="session-item active">服务下线告警怎么处理</div>
+        <div class="session-item">Pod CrashLoopBackOff 排查</div>
+        <div class="session-item">Redis 连接超时诊断</div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="avatar">S</div>
+        <div class="user-meta">
+          <div class="user-name">sre@example.com</div>
+          <div class="user-role">operator · default</div>
+        </div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <!-- Chat Page -->
+      <div id="page-chat" class="page active">
+        <header class="topbar">
+          <span class="topbar-title">服务下线告警怎么处理</span>
+          <span class="chip">Agent: Chat</span>
+          <span class="chip">trace: a9ba1fbf…</span>
+        </header>
+        <div class="chat-area">
+          <div class="chat-inner" id="chat-messages">
+            <div class="msg msg-user">
+              <div class="bubble">服务下线告警怎么处理？我们生产环境 payment-service 刚刚触发了告警。</div>
+            </div>
+            <div class="msg msg-ai">
+              <div class="bubble">
+                <p>根据内部 Runbook 和当前告警上下文，建议按以下步骤处理：</p>
+                <ol style="margin:12px 0 12px 20px;font-size:14px">
+                  <li>确认 Alertmanager 中 firing 告警详情</li>
+                  <li>检查实例健康检查与最近变更</li>
+                  <li>查看应用日志中的 ERROR 关键字</li>
+                </ol>
+                <div class="citation">
+                  <div class="citation-title">📄 告警处理手册.md</div>
+                  服务不可用，监控显示实例下线。处理步骤：登录控制台确认实例状态 → 查看应用日志定位根因…
+                </div>
+                <div class="tool-call">
+                  <span>🔧 query_internal_docs</span>
+                  <span class="tool-ok">✓ 1.2s</span>
+                </div>
+                <div class="tool-call">
+                  <span>🔧 query_prometheus_alerts</span>
+                  <span class="tool-ok">✓ 0.8s</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="chat-input-bar">
+          <div class="input-wrap">
+            <textarea placeholder="输入问题，Enter 发送…" rows="2"></textarea>
+            <div class="input-actions">
+              <div class="toggles">
+                <label class="toggle"><input type="checkbox" checked /> RAG 知识库</label>
+                <label class="toggle"><input type="checkbox" checked /> 工具调用</label>
+              </div>
+              <button class="btn-send">发送 ↑</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ops Page -->
+      <div id="page-ops" class="page">
+        <header class="topbar">
+          <span class="topbar-title">告警分析</span>
+          <span class="chip">Agent: Ops · Plan-Execute</span>
+        </header>
+        <div class="ops-layout">
+          <div class="ops-panel">
+            <h3>分析任务</h3>
+            <textarea placeholder="可选：输入自定义分析 Prompt，留空使用默认 Ops Prompt"></textarea>
+            <label style="font-size:13px;display:flex;align-items:center;gap:8px;margin-bottom:16px">
+              <input type="checkbox" /> 异步模式
+            </label>
+            <div style="margin-bottom:16px">
+              <label style="font-size:12px;color:var(--text-secondary)">Max Iterations: 20</label>
+              <input type="range" min="5" max="30" value="20" style="width:100%;margin-top:4px" />
+            </div>
+            <button class="btn-primary" style="width:100%">开始分析</button>
+          </div>
+          <div class="ops-report">
+            <div class="report-card">
+              <span class="badge badge-success">success</span>
+              <span class="chip" style="margin-left:8px">task: ops_7f3a…</span>
+              <h3 style="margin:16px 0 8px">告警分析报告</h3>
+              <p style="font-size:14px;color:var(--text-secondary)">检测到 2 条 firing 告警，已关联 Runbook 并完成根因初判。</p>
+            </div>
+            <div class="report-card">
+              <h4 style="margin-bottom:12px">执行步骤</h4>
+              <div class="timeline">
+                <div class="timeline-item">
+                  <div class="timeline-num">1</div>
+                  <div>调用 query_prometheus_alerts → 发现 payment-service 实例下线</div>
+                </div>
+                <div class="timeline-item">
+                  <div class="timeline-num">2</div>
+                  <div>调用 query_internal_docs → 匹配「服务下线告警处理手册」</div>
+                </div>
+                <div class="timeline-item">
+                  <div class="timeline-num">3</div>
+                  <div>调用 query_logs → 发现 Connection refused 错误</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Knowledge Page -->
+      <div id="page-knowledge" class="page">
+        <header class="topbar">
+          <span class="topbar-title">知识库</span>
+          <button class="btn-sm primary">＋ 上传文档</button>
+        </header>
+        <div class="knowledge-page">
+          <div class="upload-zone">
+            📁 拖拽 Markdown / TXT 文件到此处，或点击上传<br />
+            <small>支持 .md .txt .markdown · 最大 50MB</small>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>文档名称</th>
+                <th>状态</th>
+                <th>可见性</th>
+                <th>更新时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>告警处理手册.md</td>
+                <td><span class="badge badge-success">success</span></td>
+                <td>tenant</td>
+                <td>2026-06-16 14:30</td>
+                <td><button class="btn-sm">索引详情</button><button class="btn-sm">删除</button></td>
+              </tr>
+              <tr>
+                <td>K8s 故障排查 SOP.md</td>
+                <td><span class="badge badge-success">success</span></td>
+                <td>tenant</td>
+                <td>2026-06-15 09:12</td>
+                <td><button class="btn-sm">索引详情</button><button class="btn-sm">删除</button></td>
+              </tr>
+              <tr>
+                <td>变更发布 Checklist.md</td>
+                <td><span class="badge badge-warning">running</span></td>
+                <td>team</td>
+                <td>2026-06-16 15:01</td>
+                <td><button class="btn-sm">索引详情</button><button class="btn-sm">删除</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Approvals Page -->
+      <div id="page-approvals" class="page">
+        <header class="topbar">
+          <span class="topbar-title">审批中心</span>
+          <span class="chip">3 待处理</span>
+        </header>
+        <div class="knowledge-page">
+          <table>
+            <thead>
+              <tr>
+                <th>类型</th>
+                <th>关联任务</th>
+                <th>状态</th>
+                <th>过期时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>tool_invoke</td>
+                <td>ops_task_8c2f</td>
+                <td><span class="badge badge-warning">pending</span></td>
+                <td>2h 后</td>
+                <td class="approval-actions">
+                  <button class="btn-sm btn-approve">批准</button>
+                  <button class="btn-sm btn-reject">拒绝</button>
+                </td>
+              </tr>
+              <tr>
+                <td>ops_remediation</td>
+                <td>ops_task_1a9b</td>
+                <td><span class="badge badge-warning">pending</span></td>
+                <td>5h 后</td>
+                <td class="approval-actions">
+                  <button class="btn-sm btn-approve">批准</button>
+                  <button class="btn-sm btn-reject">拒绝</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Admin Page -->
+      <div id="page-admin" class="page">
+        <header class="topbar">
+          <span class="topbar-title">Agent 配置管理</span>
+        </header>
+        <div class="knowledge-page">
+          <div class="config-cards">
+            <div class="config-card active">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <strong>chat · v1</strong>
+                <span class="badge badge-success">active</span>
+              </div>
+              <p style="font-size:13px;color:var(--text-secondary);margin:8px 0">RAG + ReAct · 4 tools</p>
+              <button class="btn-sm" disabled>已激活</button>
+            </div>
+            <div class="config-card">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <strong>chat · v2-beta</strong>
+                <span class="badge" style="background:#F1F5F9">draft</span>
+              </div>
+              <p style="font-size:13px;color:var(--text-secondary);margin:8px 0">优化 Prompt · 6 tools</p>
+              <button class="btn-sm primary">激活</button>
+            </div>
+            <div class="config-card active">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <strong>ops · v1</strong>
+                <span class="badge badge-success">active</span>
+              </div>
+              <p style="font-size:13px;color:var(--text-secondary);margin:8px 0">Plan-Execute · max_iter=20</p>
+              <button class="btn-sm" disabled>已激活</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="proto-tag">Portal 原型 v1.0 · Figma 参考稿</div>
+
+<script>
+  function enterApp() {
+    document.getElementById('view-login').style.display = 'none';
+    document.getElementById('view-app').style.display = 'block';
+  }
+
+  function showPage(name) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.nav-item[data-page]').forEach(n => n.classList.remove('active'));
+    document.getElementById('page-' + name).classList.add('active');
+    document.querySelector('.nav-item[data-page="' + name + '"]')?.classList.add('active');
+  }
+
+  document.querySelectorAll('.prompt-chip').forEach(chip => {
+    chip?.addEventListener('click', () => {
+      document.getElementById('chat-messages').innerHTML = `
+        <div class="msg msg-user"><div class="bubble">${chip.textContent}</div></div>
+        <div class="msg msg-ai"><div class="bubble"><p>正在分析您的问题…</p><div class="tool-call"><span>🔧 query_internal_docs</span><span>运行中…</span></div></div></div>`;
+    });
+  });
+</script>
+</body>
+</html>

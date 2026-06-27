@@ -105,6 +105,15 @@ M1 阶段使用轻量级 `X-Trace-ID` 请求关联（Gateway 中间件注入/透
 | M4 | Ops Agent + Prometheus |
 | M5 | Portal + E2E 验收 |
 
+## M5 Portal 前端（React）
+
+```bash
+cd portal && npm install && npm run dev
+# http://127.0.0.1:5173 · 知识库已对接 M2 API
+```
+
+详见 [`portal/README.md`](../portal/README.md)。
+
 ### M2 知识库验证
 
 ```bash
