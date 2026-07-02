@@ -7,6 +7,7 @@ import (
 	"wisesentinel-platform/internal/agent/knowledge"
 	"wisesentinel-platform/internal/domain"
 	"wisesentinel-platform/internal/pkg/apperr"
+	"wisesentinel-platform/internal/pkg/ctxkeys"
 	"wisesentinel-platform/internal/rag/indexer"
 	"wisesentinel-platform/internal/rag/retriever"
 	"wisesentinel-platform/internal/repository"
@@ -42,11 +43,26 @@ func (s *Service) Retrieve(ctx context.Context, req *domain.RetrieveRequest) (*d
 	if s.retriever == nil {
 		return nil, apperr.ErrRAGFailed
 	}
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
+	if req.MaxSecretLevel <= 0 {
+		req = cloneRetrieveRequest(req)
+		req.MaxSecretLevel = domain.MaxSecretLevelForRoles(ctxkeys.RolesFrom(ctx))
+	}
 	resp, err := s.retriever.Retrieve(ctx, req)
 	if err != nil {
 		return nil, apperr.Wrap(err, apperr.ErrRAGFailed)
 	}
 	return resp, nil
+}
+
+func cloneRetrieveRequest(req *domain.RetrieveRequest) *domain.RetrieveRequest {
+	if req == nil {
+		return nil
+	}
+	copied := *req
+	return &copied
 }
 
 // SubmitIndexTask runs synchronous indexing for Phase 1.

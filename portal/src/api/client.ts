@@ -54,12 +54,20 @@ export async function apiRequest<T>(
   return parseResponse<T>(res);
 }
 
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
 export async function login(username: string, password: string) {
   return apiRequest<import('./types').AuthTokenData>('/auth/token', {
     method: 'POST',
     body: JSON.stringify({ username, password }),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Knowledge
+// ---------------------------------------------------------------------------
 
 export async function listDocuments(page = 1, size = 20, status?: string) {
   const params = new URLSearchParams({ page: String(page), size: String(size) });
@@ -92,4 +100,242 @@ export async function getIndexTask(taskId: string) {
 
 export async function ping() {
   return apiRequest<Record<string, string>>('/ping');
+}
+
+// ---------------------------------------------------------------------------
+// Session
+// ---------------------------------------------------------------------------
+
+export async function createSession(title?: string, agentType = 'chat') {
+  return apiRequest<import('./types').CreateSessionData>('/sessions', {
+    method: 'POST',
+    body: JSON.stringify({ title, agent_type: agentType }),
+  });
+}
+
+export async function listSessions(page = 1, size = 20) {
+  const params = new URLSearchParams({ page: String(page), size: String(size) });
+  return apiRequest<{ items: import('./types').SessionItem[]; total: number }>(
+    `/sessions?${params}`,
+  );
+}
+
+export async function getMessages(sessionId: string) {
+  return apiRequest<import('./types').GetSessionMessagesData>(
+    `/sessions/${sessionId}/messages`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Chat
+// ---------------------------------------------------------------------------
+
+export interface ChatResponse {
+  session_id: string;
+  answer: string;
+  citations?: import('./types').CitationItem[];
+  tool_calls?: import('./types').ToolCallSummary[];
+  trace_id: string;
+}
+
+/** Send a synchronous chat message. */
+export async function sendChat(
+  sessionId: string,
+  question: string,
+  options?: { enable_rag?: boolean; enable_tools?: boolean },
+): Promise<ChatResponse> {
+  return apiRequest<ChatResponse>('/chat', {
+    method: 'POST',
+    body: JSON.stringify({
+      session_id: sessionId,
+      question,
+      options: {
+        enable_rag: options?.enable_rag ?? true,
+        enable_tools: options?.enable_tools ?? true,
+      },
+    }),
+  });
+}
+
+export type StreamEventCallback = {
+  onConnected?: (data: string) => void;
+  onMessage?: (text: string) => void;
+  onCitation?: (data: import('./types').CitationItem) => void;
+  onToolStart?: (data: string) => void;
+  onToolEnd?: (data: string) => void;
+  onError?: (errMsg: string) => void;
+  onDone?: (data: string) => void;
+};
+
+/** Send a streaming chat message via SSE. */
+export function sendChatStream(
+  sessionId: string,
+  question: string,
+  options: { enable_rag?: boolean; enable_tools?: boolean },
+  callbacks: StreamEventCallback,
+): AbortController {
+  const controller = new AbortController();
+  const token = getToken();
+
+  const params = new URLSearchParams();
+  params.set('session_id', sessionId);
+  params.set('question', question);
+  if (options.enable_rag !== undefined) params.set('enable_rag', String(options.enable_rag));
+  if (options.enable_tools !== undefined) params.set('enable_tools', String(options.enable_tools));
+
+  // Use POST for SSE to match the backend API
+  fetch(`${API_BASE}/chat/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({
+      session_id: sessionId,
+      question,
+      options: {
+        enable_rag: options.enable_rag ?? true,
+        enable_tools: options.enable_tools ?? true,
+      },
+    }),
+    signal: controller.signal,
+  }).then(async (resp) => {
+    if (!resp.ok) {
+      const text = await resp.text();
+      callbacks.onError?.(`HTTP ${resp.status}: ${text}`);
+      return;
+    }
+
+    const reader = resp.body?.getReader();
+    if (!reader) {
+      callbacks.onError?.('No response body');
+      return;
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      let currentEvent = 'message';
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim();
+        } else if (line.startsWith('data: ')) {
+          const data = line.slice(6).trim();
+          switch (currentEvent) {
+            case 'connected':
+              callbacks.onConnected?.(data);
+              break;
+            case 'message':
+              callbacks.onMessage?.(data);
+              break;
+            case 'citation':
+              try {
+                callbacks.onCitation?.(JSON.parse(data));
+              } catch { /* ignore */ }
+              break;
+            case 'tool_start':
+              callbacks.onToolStart?.(data);
+              break;
+            case 'tool_end':
+              callbacks.onToolEnd?.(data);
+              break;
+            case 'error':
+              callbacks.onError?.(data);
+              break;
+            case 'done':
+              callbacks.onDone?.(data);
+              break;
+          }
+          currentEvent = 'message';
+        }
+      }
+    }
+  }).catch((err) => {
+    if (err.name !== 'AbortError') {
+      callbacks.onError?.(err.message);
+    }
+  });
+
+  return controller;
+}
+
+// ---------------------------------------------------------------------------
+// Ops
+// ---------------------------------------------------------------------------
+
+export async function opsAnalyze(
+  query?: string,
+  async = false,
+  maxIterations = 20,
+) {
+  return apiRequest<import('./types').OpsAnalyzeData>('/ops/analyze', {
+    method: 'POST',
+    body: JSON.stringify({
+      query: query || '',
+      options: { async, max_iterations: maxIterations },
+    }),
+  });
+}
+
+export async function getOpsTask(taskId: string) {
+  return apiRequest<import('./types').OpsTaskData>(`/ops/tasks/${taskId}`);
+}
+
+// ---------------------------------------------------------------------------
+// Approval
+// ---------------------------------------------------------------------------
+
+export async function listApprovals(page = 1, size = 20) {
+  const params = new URLSearchParams({ page: String(page), size: String(size) });
+  return apiRequest<{ items: import('./types').ApprovalItem[]; total: number }>(
+    `/approvals?${params}`,
+  );
+}
+
+export async function approvalDecision(approvalId: string, decision: string, comment = '') {
+  return apiRequest<{ approval_id: string; status: string }>(
+    `/approvals/${approvalId}/decision`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ decision, comment }),
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Admin
+// ---------------------------------------------------------------------------
+
+export async function listAgentConfigs(agentType?: string) {
+  const params = agentType ? new URLSearchParams({ agent_type: agentType }) : '';
+  return apiRequest<{ items: import('./types').AgentConfigItem[] }>(
+    `/admin/agent-configs${params ? `?${params}` : ''}`,
+  );
+}
+
+export async function activateAgentConfig(agentType: string, version: string) {
+  return apiRequest<{ agent_type: string; version: string; is_active: boolean }>(
+    `/admin/agent-configs/${version}/activate`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ agent_type: agentType, version }),
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Type helpers
+// ---------------------------------------------------------------------------
+
+export interface GetSessionMessagesData {
+  session_id: string;
+  messages: import('./types').MessageItem[];
 }

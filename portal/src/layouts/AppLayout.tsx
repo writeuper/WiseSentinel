@@ -7,10 +7,12 @@ import {
   SettingOutlined,
 } from '@ant-design/icons';
 import { Badge, Button, Drawer, Layout, Menu, Typography } from 'antd';
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { sidebarTheme } from '@/theme/tokens';
+import { listSessions } from '@/api/client';
+import type { SessionItem } from '@/api/types';
 import './AppLayout.css';
 
 const { Sider, Content } = Layout;
@@ -23,16 +25,35 @@ const navItems = [
   { key: '/admin', icon: <SettingOutlined />, label: '管理' },
 ];
 
-const recentSessions = [
-  '服务下线告警怎么处理',
-  'Pod CrashLoopBackOff 排查',
-  'Redis 连接超时诊断',
-];
-
 function SidebarContent({ collapsed }: { collapsed?: boolean }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { username, logout } = useAuth();
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
+
+  const loadSessions = useCallback(async () => {
+    try {
+      const data = await listSessions(1, 10);
+      setSessions(data.items || []);
+    } catch {
+      // Ignore - sessions are optional
+    }
+  }, []);
+
+  useEffect(() => {
+    if (location.pathname === '/chat') {
+      loadSessions();
+    }
+  }, [location.pathname, loadSessions]);
+
+  const handleNewChat = () => {
+    navigate('/chat');
+  };
+
+  const handleSessionClick = (sessionId: string) => {
+    // Navigate to chat with session_id in query params
+    navigate(`/chat?session=${sessionId}`);
+  };
 
   return (
     <div className="sidebar-inner">
@@ -46,7 +67,7 @@ function SidebarContent({ collapsed }: { collapsed?: boolean }) {
         icon={<PlusOutlined />}
         className="new-chat-btn"
         block={!collapsed}
-        onClick={() => navigate('/chat')}
+        onClick={handleNewChat}
       >
         {!collapsed && '新对话'}
       </Button>
@@ -67,18 +88,26 @@ function SidebarContent({ collapsed }: { collapsed?: boolean }) {
             item.label
           ),
         }))}
-        onClick={({ key }) => navigate(key)}
+        onClick={({ key }) => {
+          if (key !== location.pathname) {
+            navigate(key);
+          }
+        }}
         className="sidebar-menu"
       />
 
-      {!collapsed && (
+      {!collapsed && sessions.length > 0 && (
         <div className="session-list">
           <Typography.Text type="secondary" className="session-label">
             最近会话
           </Typography.Text>
-          {recentSessions.map((title) => (
-            <div key={title} className="session-item" onClick={() => navigate('/chat')}>
-              {title}
+          {sessions.slice(0, 10).map((s) => (
+            <div
+              key={s.session_id}
+              className="session-item"
+              onClick={() => handleSessionClick(s.session_id)}
+            >
+              {s.title}
             </div>
           ))}
         </div>

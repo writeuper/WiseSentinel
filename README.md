@@ -5,9 +5,10 @@
 ## M2 里程碑（当前）
 
 - RAG Engine：DashScope Embedding（无密钥时回退 HashEmbedder）+ Milvus 索引/检索
+- Knowledge Eino Graph：`FileLoader → MarkdownSplitter → MilvusIndexer`（`internal/agent/knowledge`）
 - Knowledge 上传 API：文档存储、同步索引、`ws_document` / `ws_index_task` 落库
 - 增量索引：按 `_source` / `doc_id` 删除旧向量后重建
-- 租户过滤检索：`metadata["tenant_id"]` + `visibility`
+- 租户过滤检索：`metadata["tenant_id"]` + `visibility` + `secret_level`（按角色）
 
 ## M1 里程碑
 
@@ -129,7 +130,7 @@ echo $TOKEN
 curl -X POST http://127.0.0.1:8090/api/v1/knowledge/documents/upload \
   -H "Authorization: Bearer $TOKEN" \
   -F "file=@testdata/knowledge/alert_runbook.md"
-  
+
 # 获取 Token 后上传 Runbook
 curl -X POST http://127.0.0.1:8090/api/v1/knowledge/documents/upload \
   -H "Authorization: Bearer <token>" \
@@ -147,5 +148,7 @@ curl http://127.0.0.1:8090/api/v1/knowledge/documents \
 集成测试（需 Milvus）：
 
 ```bash
-GF_GCFG_PATH=manifest/config go test -tags=integration ./internal/rag/ -run TestRAGIndexRetrieveLoop -v
+GF_GCFG_PATH=manifest/config go test -tags=integration ./internal/rag/ -v
 ```
+
+覆盖：索引/检索闭环、Eino Pipeline 增量重索引、租户隔离、`secret_level` 过滤。

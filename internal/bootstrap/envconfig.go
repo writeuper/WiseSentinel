@@ -1,7 +1,9 @@
 package bootstrap
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	"os"
 	"strings"
 
@@ -10,8 +12,60 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 )
 
-// applyConfigFromEnv applies infrastructure overrides that must be wired before client init.
+// dotEnvPaths lists candidate .env file locations to search.
+var dotEnvPaths = []string{
+	".env",
+	"/home/ubuntu/WiseSentinel/.env",
+}
+
+// loadDotEnv reads a .env file and sets each KEY=VALUE as an environment variable.
+// Existing env vars are NOT overwritten.
+func loadDotEnv() error {
+	var path string
+	for _, candidate := range dotEnvPaths {
+		if _, err := os.Stat(candidate); err == nil {
+			path = candidate
+			break
+		}
+	}
+	if path == "" {
+		return nil // .env file not found, skip
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open .env: %w", err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		if key == "" {
+			continue
+		}
+		// Only set if not already present in the environment
+		if os.Getenv(key) == "" {
+			os.Setenv(key, val)
+		}
+	}
+	return scanner.Err()
+}
+
+// applyConfigFromEnv applies infrastructure overrides from environment / .env file.
+// Must be called before any client init.
 func applyConfigFromEnv(ctx context.Context) {
+	_ = loadDotEnv()
+
 	if dsn := strings.TrimSpace(os.Getenv("MYSQL_DSN")); dsn != "" {
 		gdb.SetConfigGroup("default", gdb.ConfigGroup{
 			gdb.ConfigNode{Link: dsn},
@@ -23,6 +77,13 @@ func applyConfigFromEnv(ctx context.Context) {
 			Address: addr,
 			Pass:    strings.TrimSpace(os.Getenv("REDIS_PASSWORD")),
 		})
+	}
+
+	if apiKey := strings.TrimSpace(os.Getenv("LLM_API_KEY")); apiKey != "" {
+		g.Log().Infof(ctx, "LLM_API_KEY loaded from environment")
+	}
+	if embedKey := strings.TrimSpace(os.Getenv("EMBED_API_KEY")); embedKey != "" {
+		g.Log().Infof(ctx, "EMBED_API_KEY loaded from environment")
 	}
 
 	// Warm config adapter so yaml is loaded before handlers read secrets via configx.

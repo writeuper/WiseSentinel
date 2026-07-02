@@ -3,44 +3,36 @@ package knowledge
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"wisesentinel-platform/internal/domain"
 	"wisesentinel-platform/internal/pkg/storage"
 	"wisesentinel-platform/internal/rag/indexer"
-	"wisesentinel-platform/internal/rag/splitter"
+
+	"github.com/cloudwego/eino/components/document"
 )
 
-// Pipeline runs FileLoader → MarkdownSplitter → MilvusIndexer.
+// Pipeline orchestrates incremental delete and the Eino index graph.
 type Pipeline struct {
-	store   *storage.LocalStore
+	graph   *IndexGraph
 	indexer *indexer.MilvusIndexer
 }
 
-func NewPipeline(store *storage.LocalStore, idx *indexer.MilvusIndexer) *Pipeline {
-	return &Pipeline{store: store, indexer: idx}
+// NewPipeline builds the knowledge indexing pipeline with an Eino graph.
+func NewPipeline(ctx context.Context, store *storage.LocalStore, idx *indexer.MilvusIndexer) (*Pipeline, error) {
+	graph, err := NewIndexGraph(ctx, store, idx)
+	if err != nil {
+		return nil, err
+	}
+	return &Pipeline{graph: graph, indexer: idx}, nil
 }
 
-// IndexDocument loads, splits, deletes old chunks, and indexes a document.
+// IndexDocument deletes stale chunks then invokes the index graph.
 func (p *Pipeline) IndexDocument(ctx context.Context, req *domain.IndexTaskRequest) (int, error) {
 	if req == nil {
 		return 0, fmt.Errorf("index request is nil")
 	}
 	if req.SourceURI == "" {
 		return 0, fmt.Errorf("source uri is required")
-	}
-
-	raw, err := p.store.Read(req.SourceURI)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, fmt.Errorf("document file not found: %s", req.SourceURI)
-		}
-		return 0, err
-	}
-
-	chunks := splitter.SplitMarkdown(string(raw))
-	if len(chunks) == 0 {
-		return 0, fmt.Errorf("no chunks produced from document")
 	}
 
 	if err := p.indexer.DeleteBySource(ctx, req.SourceURI); err != nil {
@@ -52,6 +44,6 @@ func (p *Pipeline) IndexDocument(ctx context.Context, req *domain.IndexTaskReque
 		}
 	}
 
-	inputs := indexer.BuildChunkInputs(chunks, req.TenantID, req.DocID, req.SourceURI, req.Visibility, req.SecretLevel)
-	return p.indexer.IndexChunks(ctx, inputs)
+	ctx = WithIndexTask(ctx, req)
+	return p.graph.Invoke(ctx, document.Source{URI: req.SourceURI})
 }

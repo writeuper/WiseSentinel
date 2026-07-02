@@ -20,3 +20,5 @@
 /portal/node_modules/
 /portal/dist/
 /portal/tsconfig.tsbuildinfo
+/docs/
+/platform

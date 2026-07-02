@@ -6,10 +6,13 @@ import (
 )
 
 // RetrieveExpr builds a Milvus boolean expression for tenant-scoped retrieval.
-func RetrieveExpr(tenantID string, docIDs []string) string {
+func RetrieveExpr(tenantID string, docIDs []string, maxSecretLevel int) string {
 	parts := []string{
 		fmt.Sprintf(`metadata["tenant_id"] == %s`, quote(tenantID)),
 		`metadata["visibility"] in ["tenant", "team"]`,
+	}
+	if maxSecretLevel > 0 {
+		parts = append(parts, fmt.Sprintf(`metadata["secret_level"] <= %d`, maxSecretLevel))
 	}
 	if len(docIDs) > 0 {
 		parts = append(parts, fmt.Sprintf(`metadata["doc_id"] in [%s]`, joinQuoted(docIDs)))

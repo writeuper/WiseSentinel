@@ -47,7 +47,7 @@ func (r *MilvusRetriever) Retrieve(ctx context.Context, req *domain.RetrieveRequ
 		return &domain.RetrieveResponse{}, nil
 	}
 
-	expr := filter.RetrieveExpr(req.TenantID, req.DocIDs)
+	expr := filter.RetrieveExpr(req.TenantID, req.DocIDs, req.MaxSecretLevel)
 	sp, err := entity.NewIndexHNSWSearchParam(64)
 	if err != nil {
 		return nil, err

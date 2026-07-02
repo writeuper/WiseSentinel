@@ -65,6 +65,10 @@ func (c *ControllerV1) UploadDocument(ctx context.Context, req *v1.UploadDocumen
 	if visibility == "" {
 		visibility = "tenant"
 	}
+	secretLevel := req.SecretLevel
+	if secretLevel <= 0 {
+		secretLevel = domain.SecretLevelInternal
+	}
 
 	doc := &repository.Document{
 		TenantID:    tenantID,
@@ -73,7 +77,7 @@ func (c *ControllerV1) UploadDocument(ctx context.Context, req *v1.UploadDocumen
 		SourceURI:   sourceURI,
 		MimeType:    mimeTypeForExt(ext),
 		Visibility:  visibility,
-		SecretLevel: req.SecretLevel,
+		SecretLevel: secretLevel,
 		Status:      "active",
 		CreatedBy:   userID,
 	}
@@ -86,7 +90,7 @@ func (c *ControllerV1) UploadDocument(ctx context.Context, req *v1.UploadDocumen
 		DocID:       docID,
 		SourceURI:   sourceURI,
 		Visibility:  visibility,
-		SecretLevel: req.SecretLevel,
+		SecretLevel: secretLevel,
 	})
 	if err != nil {
 		return nil, err

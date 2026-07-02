@@ -119,6 +119,7 @@ func requiredRoles(path, method string) []string {
 const (
 	httpMethodDelete = "DELETE"
 	httpMethodPost   = "POST"
+	httpMethodGet    = "GET"
 )
 
 func hasAnyRole(userRoles, required []string) bool {
@@ -215,8 +216,12 @@ func auditAction(path, method string) string {
 	switch {
 	case strings.HasPrefix(path, "/api/v1/chat"):
 		return "chat.invoke"
-	case strings.HasPrefix(path, "/api/v1/knowledge"):
+	case strings.HasPrefix(path, "/api/v1/knowledge") && method == httpMethodPost:
 		return "doc.upload"
+	case strings.HasPrefix(path, "/api/v1/knowledge") && method == httpMethodDelete:
+		return "doc.delete"
+	case strings.HasPrefix(path, "/api/v1/knowledge") && method == httpMethodGet:
+		return "doc.read"
 	case strings.HasPrefix(path, "/api/v1/ops"):
 		return "ops.analyze"
 	default:

@@ -5,26 +5,63 @@ import (
 	"encoding/json"
 )
 
-// Message is a chat message placeholder until Eino schema.Message is wired in M3.
+// Message is a chat message stored in Redis session history.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// SessionConfig controls session creation.
+type SessionConfig struct {
+	Title     string
+	AgentType string
+}
+
+// SessionOption is a functional option for session creation.
+type SessionOption func(*SessionConfig)
+
+// DefaultSessionConfig returns the default session config.
+func DefaultSessionConfig() SessionConfig {
+	return SessionConfig{}
+}
+
+// WithSessionTitle sets the session title.
+func WithSessionTitle(title string) SessionOption {
+	return func(c *SessionConfig) { c.Title = title }
+}
+
+// WithSessionAgentType sets the agent type.
+func WithSessionAgentType(agentType string) SessionOption {
+	return func(c *SessionConfig) { c.AgentType = agentType }
+}
+
+// SessionSummary is a session list entry.
+type SessionSummary struct {
+	SessionID string `json:"session_id"`
+	Title     string `json:"title"`
+	AgentType string `json:"agent_type"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // SessionService manages conversation history.
 type SessionService interface {
 	GetHistory(ctx context.Context, tenantID, sessionID string) ([]*Message, error)
 	AppendMessages(ctx context.Context, tenantID, sessionID string, msgs ...*Message) error
-	CreateSession(ctx context.Context, tenantID, userID string) (sessionID string, err error)
+	CreateSession(ctx context.Context, tenantID, userID string, opts ...SessionOption) (sessionID string, err error)
+	UpdateSessionTitle(ctx context.Context, tenantID, sessionID, title string) error
+	ListSessions(ctx context.Context, tenantID, userID string, page, size int) ([]SessionSummary, int, error)
+	GetSession(ctx context.Context, tenantID, sessionID string) (*SessionSummary, error)
 }
 
 // RetrieveRequest carries RAG retrieval parameters.
 type RetrieveRequest struct {
-	TenantID string
-	Query    string
-	TopK     int
-	DocIDs   []string
-	MinScore float64
+	TenantID       string
+	Query          string
+	TopK           int
+	DocIDs         []string
+	MinScore       float64
+	MaxSecretLevel int // 0 = derive from caller roles; otherwise filter metadata secret_level
 }
 
 // RetrievedDocument is a single RAG hit.
@@ -70,11 +107,12 @@ type RAGService interface {
 
 // ToolMeta describes a registered tool.
 type ToolMeta struct {
-	Name      string
-	RiskLevel ToolRiskLevel
-	TimeoutMS int
-	Agents    []AgentType
-	Enabled   bool
+	Name        string
+	Description string
+	RiskLevel   ToolRiskLevel
+	TimeoutMS   int
+	Agents      []AgentType
+	Enabled     bool
 }
 
 // ToolInvokeRequest is a tool call from an agent.
