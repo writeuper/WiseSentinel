@@ -3,13 +3,18 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
+	"time"
 
 	chatagent "wisesentinel-platform/internal/agent/chat"
+	opsagent "wisesentinel-platform/internal/agent/ops"
 	"wisesentinel-platform/internal/agent/knowledge"
 	"wisesentinel-platform/internal/domain"
 	"wisesentinel-platform/internal/memory"
 	"wisesentinel-platform/internal/model"
 	"wisesentinel-platform/internal/orchestrator/router"
+	"wisesentinel-platform/internal/orchestrator/task"
 	"wisesentinel-platform/internal/pkg/storage"
 	"wisesentinel-platform/internal/rag"
 	"wisesentinel-platform/internal/rag/client"
@@ -23,22 +28,24 @@ import (
 	"github.com/gogf/gf/v2/database/gredis"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gctx"
+	"github.com/redis/go-redis/v9"
 )
 
 // App holds shared infrastructure clients initialized at startup.
 type App struct {
-	Milvus        *client.MilvusClient
-	RAG           domain.RAGService
-	Documents     *repository.DocumentRepo
-	Storage       *storage.LocalStore
-	Memory        domain.SessionService
-	ModelRouter   domain.ModelRouter
-	Toolkit       domain.ToolGateway
-	ChatAgent     *chatagent.Agent
-	OpsAgent      domain.AgentRunner
-	IntentRouter  domain.IntentRouter
-	SessionRepo   *repository.SessionRepo
-	OpsTaskRepo   *repository.OpsTaskRepo
+	Milvus       *client.MilvusClient
+	RAG          domain.RAGService
+	Documents    *repository.DocumentRepo
+	Storage      *storage.LocalStore
+	Memory       domain.SessionService
+	ModelRouter  domain.ModelRouter
+	Toolkit      domain.ToolGateway
+	ChatAgent    *chatagent.Agent
+	OpsAgent     domain.AgentRunner
+	IntentRouter domain.IntentRouter
+	SessionRepo  *repository.SessionRepo
+	OpsTaskRepo  *repository.OpsTaskRepo
+	OpsWorker    *task.OpsWorker
 }
 
 // Init wires database, cache, vector store, and all business services.
@@ -97,22 +104,51 @@ func Init(ctx context.Context) (*App, error) {
 	// Chat Agent
 	chatAgent := chatagent.NewAgent(modelRouter, ragService, toolGateway)
 
-	// Ops Agent (M4 - placeholder for now, will be fully implemented in M4)
-	opsAgent := NewOpsAgentPlaceholder(modelRouter, ragService, toolGateway, opsTaskRepo)
+	// Ops Agent (M4 — full Plan-Execute-Replan)
+	opsAgent := opsagent.NewAgent(modelRouter, toolGateway, opsTaskRepo)
+
+	// Ops Worker (M4 — DB polling with distributed lock)
+	// Build a standalone *redis.Client from the same REDIS_ADDRESS env
+	// so the worker can call distributed-lock primitives directly
+	// without depending on GoFrame's adapter abstraction.
+	var opsWorker *task.OpsWorker
+	var addr string
+	if cfgAddr, _ := g.Cfg().Get(ctx, "redis.address"); cfgAddr != nil {
+		addr = strings.TrimSpace(cfgAddr.String())
+	}
+	if strings.EqualFold(addr, "none") || strings.EqualFold(addr, "off") {
+		addr = ""
+	}
+	if addr == "" {
+		addr = strings.TrimSpace(os.Getenv("REDIS_ADDRESS"))
+	}
+	if addr != "" {
+		rdb := redis.NewClient(&redis.Options{
+			Addr:     addr,
+			Password: strings.TrimSpace(os.Getenv("REDIS_PASSWORD")),
+		})
+		// Best-effort ping; if it fails the worker simply never starts.
+		pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		if err := rdb.Ping(pingCtx).Err(); err == nil {
+			opsWorker = task.NewOpsWorker(opsTaskRepo, rdb, opsAgent)
+		}
+		cancel()
+	}
 
 	return &App{
-		Milvus:        milvusClient,
-		RAG:           ragService,
-		Documents:     docRepo,
-		Storage:       store,
-		Memory:        sessionService,
-		ModelRouter:   modelRouter,
-		Toolkit:       toolGateway,
-		ChatAgent:     chatAgent,
-		OpsAgent:      opsAgent,
-		IntentRouter:  intentRouter,
-		SessionRepo:   sessionRepo,
-		OpsTaskRepo:   opsTaskRepo,
+		Milvus:       milvusClient,
+		RAG:          ragService,
+		Documents:    docRepo,
+		Storage:      store,
+		Memory:       sessionService,
+		ModelRouter:  modelRouter,
+		Toolkit:      toolGateway,
+		ChatAgent:    chatAgent,
+		OpsAgent:     opsAgent,
+		IntentRouter: intentRouter,
+		SessionRepo:  sessionRepo,
+		OpsTaskRepo:  opsTaskRepo,
+		OpsWorker:    opsWorker,
 	}, nil
 }
 

@@ -22,6 +22,12 @@ func main() {
 		defer app.Milvus.Close()
 	}
 
+	// Start the Ops Worker (M4 async dispatcher).
+	if app.OpsWorker != nil {
+		app.OpsWorker.Start(ctx)
+		g.Log().Info(ctx, "OpsWorker started")
+	}
+
 	s := g.Server()
 	s.SetSessionStorage(gsession.NewStorageMemory())
 	gateway.Register(s, app)

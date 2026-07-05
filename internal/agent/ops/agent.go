@@ -1,0 +1,253 @@
+// Package ops implements the Ops Agent using Eino v0.6.0's Plan-Execute-Replan pattern.
+package ops
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"wisesentinel-platform/internal/domain"
+	"wisesentinel-platform/internal/pkg/apperr"
+	"wisesentinel-platform/internal/pkg/ctxkeys"
+	"wisesentinel-platform/internal/pkg/trace"
+	"wisesentinel-platform/internal/repository"
+
+	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/adk/prebuilt/planexecute"
+	"github.com/gogf/gf/v2/frame/g"
+	"github.com/google/uuid"
+)
+
+// Agent implements the Ops Agent and the domain.AgentRunner contract.
+//
+// It wires together the Planner, Executor, and Replanner produced by the
+// prebuilt planexecute package and runs the resulting ADK agent against
+// the configured models and tools.
+type Agent struct {
+	modelRouter domain.ModelRouter
+	toolGateway domain.ToolGateway
+	taskRepo    *repository.OpsTaskRepo
+	maxIter     int
+}
+
+// NewAgent creates a new Ops Agent.
+func NewAgent(modelRouter domain.ModelRouter, toolGateway domain.ToolGateway, taskRepo *repository.OpsTaskRepo) *Agent {
+	return &Agent{
+		modelRouter: modelRouter,
+		toolGateway: toolGateway,
+		taskRepo:    taskRepo,
+		maxIter:     20, // matches design doc §6.2
+	}
+}
+
+// ChatInvoke is not supported for the Ops agent.
+func (a *Agent) ChatInvoke(_ context.Context, _ *domain.ChatAgentRequest) (*domain.ChatAgentResponse, error) {
+	return nil, apperr.New(50002, 500, "Ops agent does not support chat")
+}
+
+// ChatStream is not supported for the Ops agent.
+func (a *Agent) ChatStream(_ context.Context, _ *domain.ChatAgentRequest) (domain.StreamReader, error) {
+	return nil, apperr.New(50002, 500, "Ops agent does not support chat stream")
+}
+
+// OpsAnalyze runs the Ops agent for the given request.
+//
+// - sync mode: runs the agent and returns the final result inline.
+// - async mode: creates a row in ws_ops_task, kicks off a background run,
+//   and returns immediately with status=pending.
+func (a *Agent) OpsAnalyze(ctx context.Context, req *domain.OpsAgentRequest) (*domain.OpsAgentResponse, error) {
+	traceID := ctxkeys.TraceIDFrom(ctx)
+	if traceID == "" {
+		traceID = trace.NewID()
+	}
+
+	taskID := "ops_" + uuid.NewString()
+	userID := ctxkeys.UserIDFrom(ctx)
+	tenantID := req.TenantID
+	if tenantID == "" {
+		tenantID = ctxkeys.TenantIDFrom(ctx)
+	}
+
+	// 1. Create the task row (pending).
+	task := &repository.OpsTask{
+		TenantID:    tenantID,
+		TaskID:      taskID,
+		TriggerType: "manual",
+		InputQuery:  req.Query,
+		Status:      string(domain.OpsTaskPending),
+		TraceID:     traceID,
+		CreatedBy:   userID,
+	}
+	if err := a.taskRepo.Create(ctx, task); err != nil {
+		return nil, apperr.Wrap(err, apperr.ErrInternal)
+	}
+
+	// 2. Async: schedule background execution and return immediately.
+	if req.Async {
+		go a.runAsync(traceID, tenantID, taskID, req)
+		return &domain.OpsAgentResponse{
+			TaskID:  taskID,
+			Status:  domain.OpsTaskPending,
+			TraceID: traceID,
+		}, nil
+	}
+
+	// 3. Sync: run inline.
+	return a.executeSync(ctx, tenantID, taskID, traceID, req)
+}
+
+// executeSync runs the agent and updates the task row to success/failed.
+func (a *Agent) executeSync(ctx context.Context, tenantID, taskID, traceID string, req *domain.OpsAgentRequest) (*domain.OpsAgentResponse, error) {
+	_ = a.taskRepo.MarkRunning(ctx, tenantID, taskID)
+
+	result, detail, err := a.runAgent(ctx, tenantID, req)
+	if err != nil {
+		detailJSON, _ := json.Marshal(detail)
+		_ = a.taskRepo.MarkFinished(ctx, tenantID, taskID,
+			string(domain.OpsTaskFailed), err.Error(), string(detailJSON))
+		return nil, apperr.Wrap(err, apperr.ErrAgentFailed)
+	}
+
+	detailJSON, _ := json.Marshal(detail)
+	_ = a.taskRepo.MarkFinished(ctx, tenantID, taskID,
+		string(domain.OpsTaskSuccess), result, string(detailJSON))
+
+	return &domain.OpsAgentResponse{
+		TaskID:  taskID,
+		Status:  domain.OpsTaskSuccess,
+		Result:  result,
+		Detail:  detail,
+		TraceID: traceID,
+	}, nil
+}
+
+// runAsync is the background driver for async tasks.
+func (a *Agent) runAsync(traceID, tenantID, taskID string, req *domain.OpsAgentRequest) {
+	// Use a fresh context with timeout (30 minutes max for any single ops task).
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	_ = a.taskRepo.MarkRunning(ctx, tenantID, taskID)
+
+	result, detail, err := a.runAgent(ctx, tenantID, req)
+	if err != nil {
+		detailJSON, _ := json.Marshal(detail)
+		_ = a.taskRepo.MarkFinished(ctx, tenantID, taskID,
+			string(domain.OpsTaskFailed), err.Error(), string(detailJSON))
+		return
+	}
+	detailJSON, _ := json.Marshal(detail)
+	_ = a.taskRepo.MarkFinished(ctx, tenantID, taskID,
+		string(domain.OpsTaskSuccess), result, string(detailJSON))
+}
+
+// runAgent builds and runs the Plan-Execute-Replan graph.
+func (a *Agent) runAgent(ctx context.Context, tenantID string, req *domain.OpsAgentRequest) (string, []string, error) {
+	// 1. Build planner / executor / replanner.
+	plannerAgent, err := NewPlanner(ctx, a.modelRouter)
+	if err != nil {
+		return "", nil, fmt.Errorf("build planner: %w", err)
+	}
+	executorAgent, err := NewExecutor(ctx, a.modelRouter, a.toolGateway, tenantID)
+	if err != nil {
+		return "", nil, fmt.Errorf("build executor: %w", err)
+	}
+	replannerAgent, err := NewReplanner(ctx, a.modelRouter)
+	if err != nil {
+		return "", nil, fmt.Errorf("build replanner: %w", err)
+	}
+
+	// 2. Wire the plan-execute-replan agent.
+	planExecuteAgent, err := planexecute.New(ctx, &planexecute.Config{
+		Planner:       plannerAgent,
+		Executor:      executorAgent,
+		Replanner:     replannerAgent,
+		MaxIterations: a.maxIter,
+	})
+	if err != nil {
+		return "", nil, fmt.Errorf("build plan-execute-replan: %w", err)
+	}
+
+	// 3. Run via the ADK Runner.
+	runner := adk.NewRunner(ctx, adk.RunnerConfig{Agent: planExecuteAgent})
+
+	query := req.Query
+	if strings.TrimSpace(query) == "" {
+		query = defaultOpsQuery
+	}
+
+	iter := runner.Query(ctx, query)
+	var (
+		result      string
+		detail      []string
+		lastMessage adk.Message
+	)
+	for {
+		event, ok := iter.Next()
+		if !ok {
+			break
+		}
+		if event == nil {
+			continue
+		}
+		if event.Err != nil {
+			g.Log().Errorf(ctx, "ops agent event error: %v", event.Err)
+			detail = append(detail, fmt.Sprintf("[error] %v", event.Err))
+			continue
+		}
+		if event.Output != nil {
+			msg, _, mErr := adk.GetMessage(event)
+			if mErr == nil && msg != nil {
+				lastMessage = msg
+				detail = append(detail, fmt.Sprintf("[%s] %s", event.AgentName, truncate(msg.Content, 400)))
+			}
+		}
+	}
+
+	if lastMessage == nil {
+		return "", detail, fmt.Errorf("ops agent produced no output")
+	}
+	result = lastMessage.Content
+	return result, detail, nil
+}
+
+// GetTaskResult retrieves a finished task's record.
+func (a *Agent) GetTaskResult(ctx context.Context, tenantID, taskID string) (*domain.OpsAgentResponse, error) {
+	task, err := a.taskRepo.Get(ctx, tenantID, taskID)
+	if err != nil {
+		return nil, apperr.Wrap(err, apperr.ErrInternal)
+	}
+	if task == nil {
+		return nil, apperr.ErrNotFound
+	}
+
+	var detail []string
+	if task.DetailJSON != "" {
+		_ = json.Unmarshal([]byte(task.DetailJSON), &detail)
+	}
+
+	return &domain.OpsAgentResponse{
+		TaskID:  task.TaskID,
+		Status:  domain.OpsTaskStatus(task.Status),
+		Result:  task.Result,
+		Detail:  detail,
+		TraceID: task.TraceID,
+	}, nil
+}
+
+const defaultOpsQuery = `你是一个智能运维告警分析助手。请按以下步骤分析最近的服务告警：
+
+1. 调用 get_current_time 获取当前时间作为分析基准。
+2. 调用 query_prometheus_alerts 获取当前正在触发的告警。
+3. 若告警涉及具体服务，使用 query_internal_docs 检索该服务的处置手册。
+4. 若需要进一步日志证据，使用 query_logs 查询相关日志。
+5. 综合以上信息给出根因分析与处置建议。`
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}

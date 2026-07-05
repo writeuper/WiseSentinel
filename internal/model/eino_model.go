@@ -365,18 +365,18 @@ func convertToolsToOpenAI(tools []*schema.ToolInfo) []map[string]interface{} {
 			},
 		}
 		if t.ParamsOneOf != nil {
-			schemaRef, err := t.ParamsOneOf.ToOpenAPIV3()
-			if err == nil && schemaRef != nil {
-				tool["function"].(map[string]interface{})["parameters"] = schemaRef
-			}
+		schemaRef, err := t.ParamsOneOf.ToJSONSchema()
+		if err == nil && schemaRef != nil {
+			tool["function"].(map[string]interface{})["parameters"] = schemaRef
 		}
-		// If no parameters, still provide an empty object
-		if _, ok := tool["function"].(map[string]interface{})["parameters"]; !ok {
-			tool["function"].(map[string]interface{})["parameters"] = map[string]interface{}{
-				"type":       "object",
-				"properties": map[string]interface{}{},
-			}
+	}
+	// If no parameters, still provide an empty object
+	if _, ok := tool["function"].(map[string]interface{})["parameters"]; !ok {
+		tool["function"].(map[string]interface{})["parameters"] = map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
 		}
+	}
 		result = append(result, tool)
 	}
 	return result

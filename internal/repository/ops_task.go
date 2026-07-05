@@ -84,6 +84,25 @@ func (r *OpsTaskRepo) Get(ctx context.Context, tenantID, taskID string) (*OpsTas
 	}, nil
 }
 
+// ListPending returns the most recent N pending tasks for any tenant.
+// The worker processes all pending tasks across tenants in FIFO order
+// (filtered and locked per-task).
+func (r *OpsTaskRepo) ListPending(ctx context.Context, limit int) ([]*OpsTask, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	var tasks []*OpsTask
+	err := g.DB().Ctx(ctx).Model("ws_ops_task").
+		Where("status", "pending").
+		Order("created_at ASC").
+		Limit(limit).
+		Scan(&tasks)
+	if err != nil {
+		return nil, err
+	}
+	return tasks, nil
+}
+
 func (r *OpsTaskRepo) MarkRunning(ctx context.Context, tenantID, taskID string) error {
 	now := time.Now()
 	_, err := g.DB().Model("ws_ops_task").Ctx(ctx).

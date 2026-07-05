@@ -21,7 +21,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/clbanning/mxj/v2 v2.7.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
-	github.com/cloudwego/eino v0.3.55 // indirect
+	github.com/cloudwego/eino v0.6.0
 	github.com/cockroachdb/errors v1.9.1 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20211118104740-dabe8e521a4f // indirect
 	github.com/cockroachdb/redact v1.1.3 // indirect
@@ -37,8 +37,8 @@ require (
 	github.com/go-openapi/jsonpointer v0.19.5 // indirect
 	github.com/go-openapi/swag v0.19.5 // indirect
 	github.com/go-sql-driver/mysql v1.7.1 // indirect
-	github.com/gogf/gf/contrib/drivers/mysql/v2 v2.7.1 // indirect
-	github.com/gogf/gf/contrib/nosql/redis/v2 v2.7.1 // indirect
+	github.com/gogf/gf/contrib/drivers/mysql/v2 v2.7.1
+	github.com/gogf/gf/contrib/nosql/redis/v2 v2.7.1
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/goph/emperror v0.17.2 // indirect
@@ -70,7 +70,7 @@ require (
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.55.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
-	github.com/redis/go-redis/v9 v9.2.1 // indirect
+	github.com/redis/go-redis/v9 v9.2.1
 	github.com/rivo/uniseg v0.4.4 // indirect
 	github.com/rogpeppe/go-internal v1.10.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
