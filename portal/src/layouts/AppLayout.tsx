@@ -28,7 +28,7 @@ const navItems = [
 function SidebarContent({ collapsed }: { collapsed?: boolean }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { username, logout } = useAuth();
+  const { username, tenantId, roles, hasRole, logout } = useAuth();
   const [sessions, setSessions] = useState<SessionItem[]>([]);
 
   const loadSessions = useCallback(async () => {
@@ -55,6 +55,26 @@ function SidebarContent({ collapsed }: { collapsed?: boolean }) {
     navigate(`/chat?session=${sessionId}`);
   };
 
+  const visibleNav = useMemo(
+    () =>
+      navItems.filter((item) => {
+        switch (item.key) {
+          case '/ops':
+            return hasRole(['operator', 'sre_admin', 'platform_admin']);
+          case '/approvals':
+            return hasRole(['sre_admin', 'platform_admin']);
+          case '/admin':
+            return hasRole(['sre_admin', 'platform_admin']);
+          case '/knowledge':
+            return true; // all authenticated users can browse
+          case '/chat':
+          default:
+            return true;
+        }
+      }),
+    [hasRole],
+  );
+
   return (
     <div className="sidebar-inner">
       <div className="sidebar-brand">
@@ -76,7 +96,7 @@ function SidebarContent({ collapsed }: { collapsed?: boolean }) {
         theme="dark"
         mode="inline"
         selectedKeys={[location.pathname]}
-        items={navItems.map((item) => ({
+        items={visibleNav.map((item) => ({
           key: item.key,
           icon: item.icon,
           label: item.badge ? (
@@ -118,7 +138,9 @@ function SidebarContent({ collapsed }: { collapsed?: boolean }) {
         {!collapsed && (
           <div>
             <div className="footer-name">{username || '用户'}</div>
-            <div className="footer-role">operator · default</div>
+            <div className="footer-role">
+              {roles.join(' · ') || 'operator'} · {tenantId}
+            </div>
           </div>
         )}
       </div>

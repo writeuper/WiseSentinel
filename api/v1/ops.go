@@ -57,3 +57,37 @@ type AlertWebhookRes struct {
 	TaskID string `json:"task_id"`
 	Status string `json:"status"`
 }
+
+// ListOpsTasksReq lists recent ops tasks for the current tenant (M5).
+type ListOpsTasksReq struct {
+	g.Meta `path:"/ops/tasks" method:"get" tags:"Ops" summary:"Ops 任务列表"`
+	Page   int    `json:"page" d:"1" in:"query"`
+	Size   int    `json:"size" d:"20" in:"query"`
+	Status string `json:"status" in:"query"`
+}
+
+// ListOpsTasksRes returns recent ops tasks.
+type ListOpsTasksRes struct {
+	Items []OpsTaskSummary `json:"items"`
+	Total int              `json:"total"`
+}
+
+// OpsTaskSummary is a row in /ops/tasks listing.
+type OpsTaskSummary struct {
+	TaskID      string `json:"task_id"`
+	Status      string `json:"status"`
+	TriggerType string `json:"trigger_type"`
+	CreatedAt   string `json:"created_at"`
+	CreatedBy   string `json:"created_by"`
+}
+
+// CurrentUserRes returns the identity decoded from the JWT (M5).
+// The handler is registered under /api/v1/me.
+type CurrentUserReq struct {
+	g.Meta `path:"/me" method:"get" tags:"Auth" summary:"当前用户信息"`
+}
+type CurrentUserRes struct {
+	Username string   `json:"username"`
+	TenantID string   `json:"tenant_id"`
+	Roles    []string `json:"roles"`
+}

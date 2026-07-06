@@ -35,6 +35,10 @@ func NewV1(app *bootstrap.App) *ControllerV1 {
 // ---------------------------------------------------------------------------
 
 // AuthToken issues a JWT for development and integration testing.
+//
+// In M5 we look up the user's assigned roles in ws_user_role so the JWT
+// carries the actual RBAC roles. Falls back to "operator" if the user
+// has no row in the role table (or the table is empty).
 func (c *ControllerV1) AuthToken(ctx context.Context, req *v1.AuthTokenReq) (*v1.AuthTokenRes, error) {
 	devPassword := configx.String(ctx, "auth.dev_password", "DEV_PASSWORD")
 	if devPassword == "" {
@@ -49,7 +53,9 @@ func (c *ControllerV1) AuthToken(ctx context.Context, req *v1.AuthTokenReq) (*v1
 		userID = "dev_user"
 	}
 
-	token, expiresIn, err := auth.IssueToken(ctx, userID, []string{string(domain.RoleOperator)}, domain.DefaultTenantID)
+	roles := lookupUserRoles(ctx, userID)
+
+	token, expiresIn, err := auth.IssueToken(ctx, userID, roles, domain.DefaultTenantID)
 	if err != nil {
 		return nil, apperr.Wrap(err, apperr.ErrInternal)
 	}
@@ -59,6 +65,34 @@ func (c *ControllerV1) AuthToken(ctx context.Context, req *v1.AuthTokenReq) (*v1
 		ExpiresIn:   expiresIn,
 		TokenType:   "Bearer",
 	}, nil
+}
+
+// lookupUserRoles reads all role strings for (tenant_id, user_id) from
+// ws_user_role and returns them as a slice. Always includes at least
+// "operator" so a freshly-seeded user can call /chat.
+func lookupUserRoles(ctx context.Context, userID string) []string {
+	tenantID := ctxkeys.TenantIDFrom(ctx)
+	if tenantID == "" {
+		tenantID = domain.DefaultTenantID
+	}
+	type row struct {
+		Role string
+	}
+	var rows []row
+	err := g.DB().Model("ws_user_role").
+		Ctx(ctx).
+		Where("tenant_id", tenantID).
+		Where("user_id", userID).
+		Fields("role").
+		Scan(&rows)
+	if err != nil || len(rows) == 0 {
+		return []string{string(domain.RoleOperator)}
+	}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Role)
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -363,6 +397,55 @@ func (c *ControllerV1) GetOpsTask(ctx context.Context, req *v1.GetOpsTaskReq) (*
 	}
 
 	return nil, apperr.New(50101, 501, "Ops 任务查询将在 M4 实现")
+}
+
+// ListOpsTasks returns a page of recent ops tasks for the tenant (M5).
+type opsTaskLister interface {
+	ListOpsTasks(ctx context.Context, tenantID, statusFilter string, page, size int) (items []opsTaskSummary, total int, err error)
+}
+
+func (c *ControllerV1) ListOpsTasks(ctx context.Context, req *v1.ListOpsTasksReq) (*v1.ListOpsTasksRes, error) {
+	tenantID := ctxkeys.TenantIDFrom(ctx)
+	// Duck-type to the concrete ops agent. The interface keeps the
+	// controller independent of the agent package while still returning
+	// a typed summary list.
+	l, ok := c.app.OpsAgent.(opsTaskLister)
+	if !ok {
+		return &v1.ListOpsTasksRes{Items: []v1.OpsTaskSummary{}, Total: 0}, nil
+	}
+	items, total, err := l.ListOpsTasks(ctx, tenantID, req.Status, req.Page, req.Size)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]v1.OpsTaskSummary, 0, len(items))
+	for _, it := range items {
+		out = append(out, v1.OpsTaskSummary{
+			TaskID:      it.TaskID,
+			Status:      it.Status,
+			TriggerType: it.TriggerType,
+			CreatedAt:   it.CreatedAt,
+			CreatedBy:   it.CreatedBy,
+		})
+	}
+	return &v1.ListOpsTasksRes{Items: out, Total: total}, nil
+}
+
+// CurrentUser returns the identity decoded from the current JWT.
+func (c *ControllerV1) CurrentUser(ctx context.Context, _ *v1.CurrentUserReq) (*v1.CurrentUserRes, error) {
+	return &v1.CurrentUserRes{
+		Username: ctxkeys.UserIDFrom(ctx),
+		TenantID: ctxkeys.TenantIDFrom(ctx),
+		Roles:    ctxkeys.RolesFrom(ctx),
+	}, nil
+}
+
+// opsTaskSummary is the internal type asserted from OpsAgent.ListOpsTasks.
+type opsTaskSummary struct {
+	TaskID      string
+	Status      string
+	TriggerType string
+	CreatedAt   string
+	CreatedBy   string
 }
 
 // AlertWebhook receives Alertmanager webhook events.

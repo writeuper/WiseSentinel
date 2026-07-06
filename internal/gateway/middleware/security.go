@@ -69,6 +69,9 @@ func isPublicPath(path string) bool {
 		"/health/ready",
 		"/metrics",
 		"/api/v1/auth/token",
+		// GET /me is a self-introspection endpoint used by the portal after login
+		// to populate role/tenant state. It only returns the caller's own identity.
+		"/api/v1/me",
 	}
 	for _, p := range public {
 		if path == p {

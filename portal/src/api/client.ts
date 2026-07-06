@@ -289,6 +289,20 @@ export async function getOpsTask(taskId: string) {
   return apiRequest<import('./types').OpsTaskData>(`/ops/tasks/${taskId}`);
 }
 
+export async function listOpsTasks(
+  page = 1,
+  size = 30,
+  status?: string,
+) {
+  const params = new URLSearchParams({ page: String(page), size: String(size) });
+  if (status) params.set('status', status);
+  return apiRequest<import('./types').ListOpsTasksData>(`/ops/tasks?${params}`);
+}
+
+export async function getCurrentUser() {
+  return apiRequest<import('./types').CurrentUser>('/me');
+}
+
 // ---------------------------------------------------------------------------
 // Approval
 // ---------------------------------------------------------------------------

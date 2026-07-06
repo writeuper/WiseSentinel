@@ -237,6 +237,38 @@ func (a *Agent) GetTaskResult(ctx context.Context, tenantID, taskID string) (*do
 	}, nil
 }
 
+// OpsTaskSummary is a slim projection of OpsTask used by the Ops UI list view.
+type OpsTaskSummary struct {
+	TaskID      string
+	Status      string
+	TriggerType string
+	CreatedAt   string
+	CreatedBy   string
+}
+
+// ListOpsTasks returns the page-indexed list of recent ops tasks for a tenant.
+func (a *Agent) ListOpsTasks(ctx context.Context, tenantID, statusFilter string, page, size int) ([]OpsTaskSummary, int, error) {
+	tasks, total, err := a.taskRepo.ListByTenant(ctx, tenantID, statusFilter, page, size)
+	if err != nil {
+		return nil, 0, apperr.Wrap(err, apperr.ErrInternal)
+	}
+	out := make([]OpsTaskSummary, 0, len(tasks))
+	for _, t := range tasks {
+		createdAt := ""
+		if !t.CreatedAt.IsZero() {
+			createdAt = t.CreatedAt.UTC().Format("2006-01-02 15:04:05")
+		}
+		out = append(out, OpsTaskSummary{
+			TaskID:      t.TaskID,
+			Status:      t.Status,
+			TriggerType: t.TriggerType,
+			CreatedAt:   createdAt,
+			CreatedBy:   t.CreatedBy,
+		})
+	}
+	return out, total, nil
+}
+
 const defaultOpsQuery = `你是一个智能运维告警分析助手。请按以下步骤分析最近的服务告警：
 
 1. 调用 get_current_time 获取当前时间作为分析基准。

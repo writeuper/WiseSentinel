@@ -103,6 +103,33 @@ func (r *OpsTaskRepo) ListPending(ctx context.Context, limit int) ([]*OpsTask, e
 	return tasks, nil
 }
 
+// ListByTenant returns the page-indexed list of ops tasks for a tenant,
+// optionally filtered by status. Most recent first.
+func (r *OpsTaskRepo) ListByTenant(ctx context.Context, tenantID, status string, page, size int) ([]*OpsTask, int, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if size <= 0 {
+		size = 20
+	}
+	model := g.DB().Ctx(ctx).Model("ws_ops_task").
+		Where("tenant_id", tenantID)
+	if status != "" {
+		model = model.Where("status", status)
+	}
+	var tasks []*OpsTask
+	if err := model.OrderDesc("created_at").Page(page, size).Scan(&tasks); err != nil {
+		return nil, 0, err
+	}
+	total, err := g.DB().Ctx(ctx).Model("ws_ops_task").
+		Where("tenant_id", tenantID).
+		Count()
+	if err != nil {
+		return tasks, 0, nil
+	}
+	return tasks, total, nil
+}
+
 func (r *OpsTaskRepo) MarkRunning(ctx context.Context, tenantID, taskID string) error {
 	now := time.Now()
 	_, err := g.DB().Model("ws_ops_task").Ctx(ctx).

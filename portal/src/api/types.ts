@@ -115,6 +115,27 @@ export interface OpsTaskData {
   detail: string[];
 }
 
+// M5 user identity (parsed from JWT).
+export type Role = 'viewer' | 'operator' | 'sre_admin' | 'platform_admin';
+
+export interface CurrentUser {
+  username: string;
+  tenant_id: string;
+  roles: Role[];
+}
+
+export interface ListOpsTasksData {
+  items: OpsTaskSummary[];
+  total: number;
+}
+
+export interface OpsTaskSummary {
+  task_id: string;
+  status: string;
+  trigger_type: string;
+  created_at: string;
+}
+
 export interface GetSessionMessagesData {
   session_id: string;
   messages: MessageItem[];

@@ -148,5 +148,36 @@ INSERT IGNORE INTO ws_tenant (tenant_id, name) VALUES ('default', 'Default Tenan
 INSERT IGNORE INTO ws_user (tenant_id, user_id, display_name, email)
 VALUES ('default', 'dev_user', 'Dev User', 'sre@example.com');
 
-INSERT IGNORE INTO ws_user_role (tenant_id, user_id, role)
-VALUES ('default', 'dev_user', 'operator');
+-- M5 RBAC seed: provide one account per role for testing the matrix.
+-- The dev account "sre@example.com" is granted every role so the
+-- Phase 1 acceptance matrix can be exercised end-to-end.
+INSERT IGNORE INTO ws_user (tenant_id, user_id, display_name, email)
+VALUES ('default', 'viewer',   'Viewer Demo',        'viewer@example.com'),
+       ('default', 'operator', 'Operator Demo',      'operator@example.com'),
+       ('default', 'sre_admin','SRE Admin Demo',     'sreadmin@example.com'),
+       ('default', 'platform_admin','Platform Admin', 'platformadmin@example.com');
+
+INSERT IGNORE INTO ws_user_role (tenant_id, user_id, role) VALUES
+    ('default', 'sre@example.com', 'viewer'),
+    ('default', 'sre@example.com', 'operator'),
+    ('default', 'sre@example.com', 'sre_admin'),
+    ('default', 'sre@example.com', 'platform_admin'),
+    ('default', 'viewer',          'viewer'),
+    ('default', 'operator',        'operator'),
+    ('default', 'operator',        'viewer'),
+    ('default', 'sre_admin',       'sre_admin'),
+    ('default', 'sre_admin',       'operator'),
+    ('default', 'sre_admin',       'viewer'),
+    ('default', 'platform_admin',  'platform_admin'),
+    ('default', 'platform_admin',  'sre_admin'),
+    ('default', 'platform_admin',  'operator'),
+    ('default', 'platform_admin',  'viewer');
+
+-- M5 seed Agent configurations: at least one version per agent type with
+-- is_active=1 so the /admin/agent-configs page has something to render.
+INSERT IGNORE INTO ws_agent_config (tenant_id, agent_type, version, config_json, is_active, created_by)
+VALUES
+    ('default', 'chat',     'v1', JSON_OBJECT('system_prompt', '你是 WiseSentinel 的智能助手 …', 'max_iterations', 25, 'tools', JSON_ARRAY('query_prometheus_alerts','query_internal_docs','get_current_time','query_logs')), 1, 'system'),
+    ('default', 'chat',     'v2-beta', JSON_OBJECT('system_prompt', '你是 WiseSentinel 的智能助手 v2', 'max_iterations', 30, 'tools', JSON_ARRAY('query_prometheus_alerts','query_internal_docs','get_current_time','query_logs','mysql_readonly')), 0, 'system'),
+    ('default', 'ops',      'v1', JSON_OBJECT('max_iterations', 20, 'system_prompt', '你是智能运维告警分析助手 …', 'tools', JSON_ARRAY('query_prometheus_alerts','query_internal_docs','get_current_time','query_logs')), 1, 'system'),
+    ('default', 'knowledge','v1', JSON_OBJECT('chunk_size', 500, 'overlap', 50, 'splitter', 'markdown'), 1, 'system');
