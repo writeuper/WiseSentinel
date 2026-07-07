@@ -18,6 +18,8 @@ import (
 
 // OpenAIEinoModel implements model.ToolCallingChatModel and model.ChatModel
 // by wrapping the standard OpenAI-compatible HTTP API.
+//
+// It includes per-instance circuit breaker and retry logic for LLM API calls.
 type OpenAIEinoModel struct {
 	mu       sync.RWMutex
 	provider string
@@ -26,7 +28,19 @@ type OpenAIEinoModel struct {
 	baseURL  string
 	timeout  time.Duration
 	tools    []*schema.ToolInfo
+
+	// circuit breaker state
+	failureCount   int
+	lastFailureAt  time.Time
+	breakerTripped bool
 }
+
+const (
+	maxRetries       = 2                      // 最多重试 2 次
+	retryBaseDelay   = 500 * time.Millisecond // 初始退避 500ms
+	breakerThreshold = 5                      // 连续 5 次失败则熔断
+	breakerResetTime = 30 * time.Second       // 30s 后尝试半开
+)
 
 // NewOpenAIEinoModel creates a new Eino-compatible chat model.
 func NewOpenAIEinoModel(provider, modelName, apiKey, baseURL string, timeout time.Duration) *OpenAIEinoModel {
@@ -73,8 +87,44 @@ func hasAPIVersion(u string) bool {
 	return false
 }
 
-// Generate sends a non-streaming chat completion request.
+// Generate sends a non-streaming chat completion request with retry and circuit breaker.
 func (m *OpenAIEinoModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+	// Check circuit breaker
+	if err := m.checkBreaker(); err != nil {
+		return nil, err
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff: 500ms, 1s
+			delay := retryBaseDelay * (1 << (attempt - 1))
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+
+		msg, err := m.doGenerate(ctx, input, opts...)
+		if err == nil {
+			m.recordSuccess()
+			return msg, nil
+		}
+
+		lastErr = err
+		// Only retry on transient errors (5xx, network errors)
+		if !isRetryableError(err) {
+			break
+		}
+	}
+
+	m.recordFailure()
+	return nil, fmt.Errorf("LLM call failed after %d retries: %w", maxRetries, lastErr)
+}
+
+// doGenerate performs a single non-streaming chat completion request.
+func (m *OpenAIEinoModel) doGenerate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
 	options := model.GetCommonOptions(nil, opts...)
 
 	reqBody := m.buildRequest(input, options, false)
@@ -106,12 +156,12 @@ func (m *OpenAIEinoModel) Generate(ctx context.Context, input []*schema.Message,
 	var chatResp struct {
 		Choices []struct {
 			Message struct {
-				Role         string           `json:"role"`
-				Content      string           `json:"content"`
-				ToolCalls    []openAIToolCall `json:"tool_calls,omitempty"`
+				Role      string           `json:"role"`
+				Content   string           `json:"content"`
+				ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
 			} `json:"message"`
-			FinishReason string           `json:"finish_reason"`
-			Index        int              `json:"index"`
+			FinishReason string `json:"finish_reason"`
+			Index        int    `json:"index"`
 		} `json:"choices"`
 		Usage *struct {
 			PromptTokens     int `json:"prompt_tokens"`
@@ -345,9 +395,9 @@ func (m *OpenAIEinoModel) buildRequest(input []*schema.Message, opts *model.Opti
 
 // openAIToolCall is the OpenAI-compatible tool call structure.
 type openAIToolCall struct {
-	ID       string  `json:"id,omitempty"`
-	Index    *int    `json:"index,omitempty"`
-	Type     string  `json:"type"`
+	ID       string `json:"id,omitempty"`
+	Index    *int   `json:"index,omitempty"`
+	Type     string `json:"type"`
 	Function struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
@@ -365,21 +415,90 @@ func convertToolsToOpenAI(tools []*schema.ToolInfo) []map[string]interface{} {
 			},
 		}
 		if t.ParamsOneOf != nil {
-		schemaRef, err := t.ParamsOneOf.ToJSONSchema()
-		if err == nil && schemaRef != nil {
-			tool["function"].(map[string]interface{})["parameters"] = schemaRef
+			schemaRef, err := t.ParamsOneOf.ToJSONSchema()
+			if err == nil && schemaRef != nil {
+				tool["function"].(map[string]interface{})["parameters"] = schemaRef
+			}
 		}
-	}
-	// If no parameters, still provide an empty object
-	if _, ok := tool["function"].(map[string]interface{})["parameters"]; !ok {
-		tool["function"].(map[string]interface{})["parameters"] = map[string]interface{}{
-			"type":       "object",
-			"properties": map[string]interface{}{},
+		// If no parameters, still provide an empty object
+		if _, ok := tool["function"].(map[string]interface{})["parameters"]; !ok {
+			tool["function"].(map[string]interface{})["parameters"] = map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			}
 		}
-	}
 		result = append(result, tool)
 	}
 	return result
+}
+
+// ---------------------------------------------------------------------------
+// Circuit breaker + retry helpers
+// ---------------------------------------------------------------------------
+
+// checkBreaker returns an error if the circuit breaker is tripped and hasn't
+// reset yet. If the breaker has been tripped for longer than breakerResetTime,
+// it allows a single probe request (half-open state).
+func (m *OpenAIEinoModel) checkBreaker() error {
+	m.mu.RLock()
+	tripped := m.breakerTripped
+	lastFailure := m.lastFailureAt
+	m.mu.RUnlock()
+
+	if !tripped {
+		return nil
+	}
+
+	// Half-open: allow a probe after the reset window
+	if time.Since(lastFailure) > breakerResetTime {
+		m.mu.Lock()
+		m.breakerTripped = false
+		m.failureCount = 0
+		m.mu.Unlock()
+		return nil
+	}
+
+	return fmt.Errorf("LLM circuit breaker is open (tripped after %d failures, retry in %v)",
+		breakerThreshold, breakerResetTime-time.Since(lastFailure))
+}
+
+// recordSuccess resets the failure count on a successful call.
+func (m *OpenAIEinoModel) recordSuccess() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failureCount = 0
+	m.breakerTripped = false
+}
+
+// recordFailure increments the failure count and trips the breaker if
+// the threshold is reached.
+func (m *OpenAIEinoModel) recordFailure() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failureCount++
+	m.lastFailureAt = time.Now()
+	if m.failureCount >= breakerThreshold {
+		m.breakerTripped = true
+	}
+}
+
+// isRetryableError returns true if the error is likely transient
+// (network error, 5xx, rate limit).
+func isRetryableError(err error) bool {
+	errStr := err.Error()
+	// Network / timeout errors
+	if strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "no such host") ||
+		strings.Contains(errStr, "reset by peer") {
+		return true
+	}
+	// HTTP 5xx
+	if strings.Contains(errStr, "HTTP 5") ||
+		strings.Contains(errStr, "HTTP 429") {
+		return true
+	}
+	return false
 }
 
 // Ensure OpenAIEinoModel implements model.ToolCallingChatModel.

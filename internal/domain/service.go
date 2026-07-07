@@ -219,11 +219,26 @@ type StreamReader interface {
 	Close() error
 }
 
-// AgentRunner executes chat and ops agents.
-type AgentRunner interface {
-	ChatInvoke(ctx context.Context, req *ChatAgentRequest) (*ChatAgentResponse, error)
-	ChatStream(ctx context.Context, req *ChatAgentRequest) (StreamReader, error)
-	OpsAnalyze(ctx context.Context, req *OpsAgentRequest) (*OpsAgentResponse, error)
+// ChatAgent executes chat conversations.
+type ChatAgent interface {
+	Invoke(ctx context.Context, req *ChatAgentRequest) (*ChatAgentResponse, error)
+	Stream(ctx context.Context, req *ChatAgentRequest) (StreamReader, error)
+}
+
+// OpsAgent performs Ops alert analysis.
+type OpsAgent interface {
+	Analyze(ctx context.Context, req *OpsAgentRequest) (*OpsAgentResponse, error)
+	GetTaskResult(ctx context.Context, tenantID, taskID string) (*OpsAgentResponse, error)
+	ListTasks(ctx context.Context, tenantID, statusFilter string, page, size int) ([]OpsTaskSummary, int, error)
+}
+
+// OpsTaskSummary is a lightweight projection of an ops task for list views.
+type OpsTaskSummary struct {
+	TaskID      string
+	Status      string
+	TriggerType string
+	CreatedAt   string
+	CreatedBy   string
 }
 
 // RouteRequest is input to the intent router.

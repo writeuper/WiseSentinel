@@ -24,13 +24,13 @@ import (
 type OpsWorker struct {
 	taskRepo   *repository.OpsTaskRepo
 	redis      *redis.Client
-	opsAgent   domain.AgentRunner
+	opsAgent   domain.OpsAgent
 	pollPeriod time.Duration
 	lockTTL    time.Duration
 }
 
 // NewOpsWorker creates a worker instance.
-func NewOpsWorker(taskRepo *repository.OpsTaskRepo, redis *redis.Client, opsAgent domain.AgentRunner) *OpsWorker {
+func NewOpsWorker(taskRepo *repository.OpsTaskRepo, redis *redis.Client, opsAgent domain.OpsAgent) *OpsWorker {
 	return &OpsWorker{
 		taskRepo:   taskRepo,
 		redis:      redis,
@@ -113,7 +113,7 @@ func (w *OpsWorker) dispatch(ctx context.Context, t *repository.OpsTask) {
 		// Inject tenant and user into the agent context.
 		runCtx = w.contextWithIdentity(runCtx, task.TenantID, userID, task.TraceID)
 
-		resp, err := w.opsAgent.OpsAnalyze(runCtx, req)
+		resp, err := w.opsAgent.Analyze(runCtx, req)
 		if err != nil {
 			detailJSON := `["异步执行失败: ` + err.Error() + `"]`
 			_ = w.taskRepo.MarkFinished(runCtx, task.TenantID, task.TaskID,

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	v1 "wisesentinel-platform/api/v1"
-	chatagent "wisesentinel-platform/internal/agent/chat"
 	"wisesentinel-platform/internal/bootstrap"
 	"wisesentinel-platform/internal/domain"
 	"wisesentinel-platform/internal/gateway/auth"
@@ -217,7 +216,7 @@ func (c *ControllerV1) Chat(ctx context.Context, req *v1.ChatReq) (*v1.ChatRes, 
 	}
 
 	// Invoke chat agent
-	result, err := c.app.ChatAgent.Invoke(ctx, &chatagent.UserMessage{
+	result, err := c.app.ChatAgent.Invoke(ctx, &domain.ChatAgentRequest{
 		TenantID:  tenantID,
 		SessionID: req.SessionID,
 		UserID:    userID,
@@ -291,7 +290,7 @@ func (c *ControllerV1) ChatStream(ctx context.Context, req *v1.ChatStreamReq) (*
 	r.Response.WriteHeader(200)
 
 	// Start streaming
-	events, err := c.app.ChatAgent.Stream(ctx, &chatagent.UserMessage{
+	reader, err := c.app.ChatAgent.Stream(ctx, &domain.ChatAgentRequest{
 		TenantID:  tenantID,
 		SessionID: req.SessionID,
 		UserID:    userID,
@@ -302,12 +301,17 @@ func (c *ControllerV1) ChatStream(ctx context.Context, req *v1.ChatStreamReq) (*
 	if err != nil {
 		return nil, err
 	}
+	defer reader.Close()
 
 	var fullAnswer strings.Builder
-	for event := range events {
-		writeSSEToResponse(r.Response, event.Type, event.Data)
-		if event.Type == "message" {
-			fullAnswer.WriteString(event.Data)
+	for {
+		event, data, ok := reader.Next()
+		if !ok {
+			break
+		}
+		writeSSEToResponse(r.Response, event, data)
+		if event == "message" {
+			fullAnswer.WriteString(data)
 		}
 	}
 
@@ -355,7 +359,7 @@ func (c *ControllerV1) OpsAnalyze(ctx context.Context, req *v1.OpsAnalyzeReq) (*
 		}
 	}
 
-	result, err := c.app.OpsAgent.OpsAnalyze(ctx, &domain.OpsAgentRequest{
+	result, err := c.app.OpsAgent.Analyze(ctx, &domain.OpsAgentRequest{
 		TenantID:      tenantID,
 		UserID:        userID,
 		Query:         req.Query,
@@ -379,41 +383,23 @@ func (c *ControllerV1) OpsAnalyze(ctx context.Context, req *v1.OpsAnalyzeReq) (*
 func (c *ControllerV1) GetOpsTask(ctx context.Context, req *v1.GetOpsTaskReq) (*v1.GetOpsTaskRes, error) {
 	tenantID := ctxkeys.TenantIDFrom(ctx)
 
-	// Check if OpsAgent is the placeholder (has GetTaskResult method)
-	type taskGetter interface {
-		GetTaskResult(ctx context.Context, tenantID, taskID string) (*domain.OpsAgentResponse, error)
-	}
-	if getter, ok := c.app.OpsAgent.(taskGetter); ok {
-		result, err := getter.GetTaskResult(ctx, tenantID, req.TaskID)
-		if err != nil {
-			return nil, err
-		}
-		return &v1.GetOpsTaskRes{
-			TaskID: result.TaskID,
-			Status: string(result.Status),
-			Result: result.Result,
-			Detail: result.Detail,
-		}, nil
+	result, err := c.app.OpsAgent.GetTaskResult(ctx, tenantID, req.TaskID)
+	if err != nil {
+		return nil, err
 	}
 
-	return nil, apperr.New(50101, 501, "Ops 任务查询将在 M4 实现")
+	return &v1.GetOpsTaskRes{
+		TaskID: result.TaskID,
+		Status: string(result.Status),
+		Result: result.Result,
+		Detail: result.Detail,
+	}, nil
 }
 
-// ListOpsTasks returns a page of recent ops tasks for the tenant (M5).
-type opsTaskLister interface {
-	ListOpsTasks(ctx context.Context, tenantID, statusFilter string, page, size int) (items []opsTaskSummary, total int, err error)
-}
-
+// ListOpsTasks returns a page of recent ops tasks for the tenant.
 func (c *ControllerV1) ListOpsTasks(ctx context.Context, req *v1.ListOpsTasksReq) (*v1.ListOpsTasksRes, error) {
 	tenantID := ctxkeys.TenantIDFrom(ctx)
-	// Duck-type to the concrete ops agent. The interface keeps the
-	// controller independent of the agent package while still returning
-	// a typed summary list.
-	l, ok := c.app.OpsAgent.(opsTaskLister)
-	if !ok {
-		return &v1.ListOpsTasksRes{Items: []v1.OpsTaskSummary{}, Total: 0}, nil
-	}
-	items, total, err := l.ListOpsTasks(ctx, tenantID, req.Status, req.Page, req.Size)
+	items, total, err := c.app.OpsAgent.ListTasks(ctx, tenantID, req.Status, req.Page, req.Size)
 	if err != nil {
 		return nil, err
 	}
@@ -439,15 +425,6 @@ func (c *ControllerV1) CurrentUser(ctx context.Context, _ *v1.CurrentUserReq) (*
 	}, nil
 }
 
-// opsTaskSummary is the internal type asserted from OpsAgent.ListOpsTasks.
-type opsTaskSummary struct {
-	TaskID      string
-	Status      string
-	TriggerType string
-	CreatedAt   string
-	CreatedBy   string
-}
-
 // AlertWebhook receives Alertmanager webhook events.
 func (c *ControllerV1) AlertWebhook(ctx context.Context, req *v1.AlertWebhookReq) (*v1.AlertWebhookRes, error) {
 	tenantID := ctxkeys.TenantIDFrom(ctx)
@@ -465,7 +442,7 @@ func (c *ControllerV1) AlertWebhook(ctx context.Context, req *v1.AlertWebhookReq
 	}
 	query := fmt.Sprintf("检测到告警：%s\n请按 Runbook 分析并生成报告。", strings.Join(alertDescs, "; "))
 
-	result, err := c.app.OpsAgent.OpsAnalyze(ctx, &domain.OpsAgentRequest{
+	result, err := c.app.OpsAgent.Analyze(ctx, &domain.OpsAgentRequest{
 		TenantID:      tenantID,
 		UserID:        userID,
 		Query:         query,
@@ -560,10 +537,10 @@ func (c *ControllerV1) ApprovalDecision(ctx context.Context, req *v1.ApprovalDec
 		Where("approval_id", req.ApprovalID).
 		Where("status", "pending").
 		Data(g.Map{
-			"status":     req.Decision,
+			"status":      req.Decision,
 			"approver_id": userID,
-			"comment":    req.Comment,
-			"updated_at": now,
+			"comment":     req.Comment,
+			"updated_at":  now,
 		}).
 		Update()
 	if err != nil {
@@ -666,8 +643,3 @@ func (c *ControllerV1) Ping(ctx context.Context, _ *v1.PingReq) (v1.PingRes, err
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-func notImplemented(feature string) error {
-	return apperr.New(50101, 501, feature+" 将在后续里程碑实现")
-}
-

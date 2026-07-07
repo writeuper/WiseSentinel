@@ -4,8 +4,6 @@ package chat
 import (
 	"context"
 	"fmt"
-	"sync"
-	"time"
 
 	"wisesentinel-platform/internal/domain"
 	"wisesentinel-platform/internal/pkg/apperr"
@@ -20,39 +18,9 @@ import (
 	"github.com/gogf/gf/v2/frame/g"
 )
 
-const (
-	systemPromptTpl = `你是智哨(WiseSentinel)智能运维助手，负责处理运维相关的问题。
+const maxStep = 25
 
-回答规则：
-- 回答必须基于提供的文档与工具返回结果，不得编造信息
-- 引用文档时标注来源
-- 保持专业、简洁的运维风格
-
-当前时间：%s
-相关文档：
-%s`
-	maxStep = 25
-)
-
-// UserMessage is the internal chat agent request.
-type UserMessage struct {
-	TenantID  string
-	SessionID string
-	UserID    string
-	Query     string
-	History   []*domain.Message
-	Options   domain.ChatOptions
-}
-
-// ChatResult is the internal chat agent response.
-type ChatResult struct {
-	Answer    string
-	Citations []domain.Citation
-	ToolCalls []domain.ToolCallSummary
-	TraceID   string
-}
-
-// Agent implements the Chat Agent using Eino's ReAct agent.
+// Agent implements domain.ChatAgent using Eino's ReAct agent.
 type Agent struct {
 	modelRouter domain.ModelRouter
 	ragService  domain.RAGService
@@ -69,7 +37,7 @@ func NewAgent(modelRouter domain.ModelRouter, ragService domain.RAGService, tool
 }
 
 // Invoke processes a synchronous chat request.
-func (a *Agent) Invoke(ctx context.Context, req *UserMessage) (*ChatResult, error) {
+func (a *Agent) Invoke(ctx context.Context, req *domain.ChatAgentRequest) (*domain.ChatAgentResponse, error) {
 	traceID := ctxkeys.TraceIDFrom(ctx)
 	if traceID == "" {
 		traceID = trace.NewID()
@@ -93,7 +61,8 @@ func (a *Agent) Invoke(ctx context.Context, req *UserMessage) (*ChatResult, erro
 		return nil, apperr.Wrap(err, apperr.ErrAgentFailed)
 	}
 
-	return &ChatResult{
+	return &domain.ChatAgentResponse{
+		SessionID: req.SessionID,
 		Answer:    result.Content,
 		Citations: citations,
 		ToolCalls: extractToolCallSummary(result),
@@ -101,18 +70,20 @@ func (a *Agent) Invoke(ctx context.Context, req *UserMessage) (*ChatResult, erro
 	}, nil
 }
 
-// Stream processes a streaming chat request.
-func (a *Agent) Stream(ctx context.Context, req *UserMessage) (<-chan StreamEvent, error) {
-	events := make(chan StreamEvent, 64)
+// Stream processes a streaming chat request and returns a StreamReader.
+func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domain.StreamReader, error) {
 	traceID := ctxkeys.TraceIDFrom(ctx)
 	if traceID == "" {
 		traceID = trace.NewID()
 	}
 
-	go func() {
-		defer close(events)
+	r := &chatStreamReader{
+		events: make(chan streamEventItem, 64),
+	}
 
-		events <- StreamEvent{Type: "connected", Data: fmt.Sprintf(`{"status":"connected","session_id":"%s"}`, req.SessionID)}
+	go func() {
+		defer close(r.events)
+		r.send("connected", fmt.Sprintf(`{"status":"connected","session_id":"%s"}`, req.SessionID))
 
 		// 1. Retrieve RAG docs
 		documents, _ := a.retrieveDocs(ctx, req)
@@ -120,8 +91,8 @@ func (a *Agent) Stream(ctx context.Context, req *UserMessage) (<-chan StreamEven
 		// 2. Build the ReAct agent
 		reactAgent, err := a.buildReActAgent(ctx, req, documents, traceID)
 		if err != nil {
-			events <- StreamEvent{Type: "error", Data: fmt.Sprintf("Agent 构建失败: %v", err)}
-			events <- StreamEvent{Type: "done", Data: fmt.Sprintf(`{"trace_id":"%s"}`, traceID)}
+			r.send("error", fmt.Sprintf("Agent 构建失败: %v", err))
+			r.send("done", fmt.Sprintf(`{"trace_id":"%s"}`, traceID))
 			return
 		}
 
@@ -132,13 +103,12 @@ func (a *Agent) Stream(ctx context.Context, req *UserMessage) (<-chan StreamEven
 		sr, err := reactAgent.Stream(ctx, input)
 		if err != nil {
 			errMsg := fmt.Sprintf("Stream 失败: %v", err)
-			// Try to unwrap for more details
 			if unwrapped := fmt.Sprintf("%+v", err); unwrapped != err.Error() {
 				errMsg = fmt.Sprintf("Stream 失败: %v (detail: %s)", err, unwrapped)
 			}
 			g.Log().Errorf(ctx, "ChatAgent.Stream reactAgent.Stream error: %+v", err)
-			events <- StreamEvent{Type: "error", Data: errMsg}
-			events <- StreamEvent{Type: "done", Data: fmt.Sprintf(`{"trace_id":"%s"}`, traceID)}
+			r.send("error", errMsg)
+			r.send("done", fmt.Sprintf(`{"trace_id":"%s"}`, traceID))
 			return
 		}
 		defer sr.Close()
@@ -149,31 +119,54 @@ func (a *Agent) Stream(ctx context.Context, req *UserMessage) (<-chan StreamEven
 				break
 			}
 			if msg.Content != "" {
-				events <- StreamEvent{Type: "message", Data: msg.Content}
+				r.send("message", msg.Content)
 			}
 		}
-		events <- StreamEvent{Type: "done", Data: fmt.Sprintf(`{"trace_id":"%s"}`, traceID)}
+		r.send("done", fmt.Sprintf(`{"trace_id":"%s"}`, traceID))
 	}()
 
-	return events, nil
+	return r, nil
 }
 
-// StreamEvent represents an SSE event for streaming.
-type StreamEvent struct {
-	Type string
-	Data string
+// streamEventItem holds a single SSE-like event.
+type streamEventItem struct {
+	event string
+	data  string
+}
+
+// chatStreamReader implements domain.StreamReader over a channel.
+type chatStreamReader struct {
+	events chan streamEventItem
+}
+
+func (r *chatStreamReader) send(event, data string) {
+	r.events <- streamEventItem{event: event, data: data}
+}
+
+// Next returns the next event (event type, data payload, and whether more events exist).
+func (r *chatStreamReader) Next() (event string, data string, ok bool) {
+	item, more := <-r.events
+	if !more {
+		return "", "", false
+	}
+	return item.event, item.data, true
+}
+
+// Close terminates the stream.
+func (r *chatStreamReader) Close() error {
+	return nil
 }
 
 // buildReActAgent creates a new ReAct agent with the appropriate configuration.
-func (a *Agent) buildReActAgent(ctx context.Context, req *UserMessage, documents string, traceID string) (*react.Agent, error) {
+func (a *Agent) buildReActAgent(ctx context.Context, req *domain.ChatAgentRequest, documents string, traceID string) (*react.Agent, error) {
 	// 1. Get the chat model
 	rawModel, err := a.modelRouter.ChatModel(ctx, domain.ModelProfileChatFast)
 	if err != nil {
-		return nil, fmt.Errorf("model router: %w", err)
+		return nil, apperr.Wrap(err, apperr.ErrAgentFailed)
 	}
 	chatModel, ok := rawModel.(model.ToolCallingChatModel)
 	if !ok {
-		return nil, fmt.Errorf("model does not implement ToolCallingChatModel")
+		return nil, apperr.New(50002, 500, "model does not implement ToolCallingChatModel")
 	}
 
 	// 2. Get tools for the chat agent
@@ -183,58 +176,41 @@ func (a *Agent) buildReActAgent(ctx context.Context, req *UserMessage, documents
 	}
 	einoTools := make([]tool.BaseTool, 0)
 	if req.Options.EnableTools && a.toolGateway != nil {
-		// Type-assert to access Eino-specific AsEinoTools method
 		type einoToolLister interface {
 			AsEinoTools(ctx context.Context, tenantID string, agentType domain.AgentType) ([]tool.BaseTool, error)
 		}
 		if lister, ok := a.toolGateway.(einoToolLister); ok {
 			einoTools, err = lister.AsEinoTools(ctx, tenantID, domain.AgentTypeChat)
 			if err != nil {
-				return nil, fmt.Errorf("list tools: %w", err)
+				return nil, apperr.Wrap(err, apperr.ErrAgentFailed)
 			}
 		}
 	}
 
-	// 3. Build system prompt
-	now := time.Now().Format("2006-01-02 15:04:05 MST")
-	systemPrompt := fmt.Sprintf(systemPromptTpl, now, documents)
+	// 3. Build system prompt using ChatTemplate
+	chatTemplate := NewChatTemplate(documents)
 
-	// 4. Create MessageModifier to inject system prompt on first call only
-	var once sync.Once
-	modifier := func(_ context.Context, input []*schema.Message) []*schema.Message {
-		var result []*schema.Message
-		once.Do(func() {
-			result = make([]*schema.Message, 0, len(input)+1)
-			result = append(result, schema.SystemMessage(systemPrompt))
-			result = append(result, input...)
-		})
-		if result != nil {
-			return result
-		}
-		return input
-	}
-
-	// 5. Create ReAct agent config
+	// 4. Create ReAct agent config with the extracted MessageModifier
 	config := &react.AgentConfig{
 		ToolCallingModel: chatModel,
 		ToolsConfig: compose.ToolsNodeConfig{
 			Tools: einoTools,
 		},
-		MessageModifier: modifier,
+		MessageModifier: chatTemplate.MessageModifier(),
 		MaxStep:         maxStep,
 		GraphName:       "ChatAgent",
 	}
 
 	agent, err := react.NewAgent(ctx, config)
 	if err != nil {
-		return nil, fmt.Errorf("new react agent: %w", err)
+		return nil, apperr.Wrap(err, apperr.ErrAgentFailed)
 	}
 
 	return agent, nil
 }
 
 // buildInputMessages builds the []*schema.Message from the user request.
-func (a *Agent) buildInputMessages(req *UserMessage) []*schema.Message {
+func (a *Agent) buildInputMessages(req *domain.ChatAgentRequest) []*schema.Message {
 	messages := make([]*schema.Message, 0, len(req.History)+1)
 
 	// Add history messages
@@ -253,7 +229,7 @@ func (a *Agent) buildInputMessages(req *UserMessage) []*schema.Message {
 }
 
 // retrieveDocs retrieves RAG documents if enabled.
-func (a *Agent) retrieveDocs(ctx context.Context, req *UserMessage) (string, []domain.Citation) {
+func (a *Agent) retrieveDocs(ctx context.Context, req *domain.ChatAgentRequest) (string, []domain.Citation) {
 	var documents string
 	var citations []domain.Citation
 

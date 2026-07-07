@@ -40,8 +40,8 @@ type App struct {
 	Memory       domain.SessionService
 	ModelRouter  domain.ModelRouter
 	Toolkit      domain.ToolGateway
-	ChatAgent    *chatagent.Agent
-	OpsAgent     domain.AgentRunner
+	ChatAgent    domain.ChatAgent
+	OpsAgent     domain.OpsAgent
 	IntentRouter domain.IntentRouter
 	SessionRepo  *repository.SessionRepo
 	OpsTaskRepo  *repository.OpsTaskRepo

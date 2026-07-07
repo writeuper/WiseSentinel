@@ -20,7 +20,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Agent implements the Ops Agent and the domain.AgentRunner contract.
+// Agent implements domain.OpsAgent.
 //
 // It wires together the Planner, Executor, and Replanner produced by the
 // prebuilt planexecute package and runs the resulting ADK agent against
@@ -42,22 +42,12 @@ func NewAgent(modelRouter domain.ModelRouter, toolGateway domain.ToolGateway, ta
 	}
 }
 
-// ChatInvoke is not supported for the Ops agent.
-func (a *Agent) ChatInvoke(_ context.Context, _ *domain.ChatAgentRequest) (*domain.ChatAgentResponse, error) {
-	return nil, apperr.New(50002, 500, "Ops agent does not support chat")
-}
-
-// ChatStream is not supported for the Ops agent.
-func (a *Agent) ChatStream(_ context.Context, _ *domain.ChatAgentRequest) (domain.StreamReader, error) {
-	return nil, apperr.New(50002, 500, "Ops agent does not support chat stream")
-}
-
-// OpsAnalyze runs the Ops agent for the given request.
+// Analyze runs the Ops agent for the given request.
 //
-// - sync mode: runs the agent and returns the final result inline.
-// - async mode: creates a row in ws_ops_task, kicks off a background run,
-//   and returns immediately with status=pending.
-func (a *Agent) OpsAnalyze(ctx context.Context, req *domain.OpsAgentRequest) (*domain.OpsAgentResponse, error) {
+//   - sync mode: runs the agent and returns the final result inline.
+//   - async mode: creates a row in ws_ops_task, kicks off a background run,
+//     and returns immediately with status=pending.
+func (a *Agent) Analyze(ctx context.Context, req *domain.OpsAgentRequest) (*domain.OpsAgentResponse, error) {
 	traceID := ctxkeys.TraceIDFrom(ctx)
 	if traceID == "" {
 		traceID = trace.NewID()
@@ -148,15 +138,15 @@ func (a *Agent) runAgent(ctx context.Context, tenantID string, req *domain.OpsAg
 	// 1. Build planner / executor / replanner.
 	plannerAgent, err := NewPlanner(ctx, a.modelRouter)
 	if err != nil {
-		return "", nil, fmt.Errorf("build planner: %w", err)
+		return "", nil, apperr.Wrap(err, apperr.ErrAgentFailed)
 	}
 	executorAgent, err := NewExecutor(ctx, a.modelRouter, a.toolGateway, tenantID)
 	if err != nil {
-		return "", nil, fmt.Errorf("build executor: %w", err)
+		return "", nil, apperr.Wrap(err, apperr.ErrAgentFailed)
 	}
 	replannerAgent, err := NewReplanner(ctx, a.modelRouter)
 	if err != nil {
-		return "", nil, fmt.Errorf("build replanner: %w", err)
+		return "", nil, apperr.Wrap(err, apperr.ErrAgentFailed)
 	}
 
 	// 2. Wire the plan-execute-replan agent.
@@ -167,7 +157,7 @@ func (a *Agent) runAgent(ctx context.Context, tenantID string, req *domain.OpsAg
 		MaxIterations: a.maxIter,
 	})
 	if err != nil {
-		return "", nil, fmt.Errorf("build plan-execute-replan: %w", err)
+		return "", nil, apperr.Wrap(err, apperr.ErrAgentFailed)
 	}
 
 	// 3. Run via the ADK Runner.
@@ -207,7 +197,7 @@ func (a *Agent) runAgent(ctx context.Context, tenantID string, req *domain.OpsAg
 	}
 
 	if lastMessage == nil {
-		return "", detail, fmt.Errorf("ops agent produced no output")
+		return "", detail, apperr.New(50002, 500, "ops agent produced no output")
 	}
 	result = lastMessage.Content
 	return result, detail, nil
@@ -237,28 +227,19 @@ func (a *Agent) GetTaskResult(ctx context.Context, tenantID, taskID string) (*do
 	}, nil
 }
 
-// OpsTaskSummary is a slim projection of OpsTask used by the Ops UI list view.
-type OpsTaskSummary struct {
-	TaskID      string
-	Status      string
-	TriggerType string
-	CreatedAt   string
-	CreatedBy   string
-}
-
-// ListOpsTasks returns the page-indexed list of recent ops tasks for a tenant.
-func (a *Agent) ListOpsTasks(ctx context.Context, tenantID, statusFilter string, page, size int) ([]OpsTaskSummary, int, error) {
+// ListTasks returns the page-indexed list of recent ops tasks for a tenant.
+func (a *Agent) ListTasks(ctx context.Context, tenantID, statusFilter string, page, size int) ([]domain.OpsTaskSummary, int, error) {
 	tasks, total, err := a.taskRepo.ListByTenant(ctx, tenantID, statusFilter, page, size)
 	if err != nil {
 		return nil, 0, apperr.Wrap(err, apperr.ErrInternal)
 	}
-	out := make([]OpsTaskSummary, 0, len(tasks))
+	out := make([]domain.OpsTaskSummary, 0, len(tasks))
 	for _, t := range tasks {
 		createdAt := ""
 		if !t.CreatedAt.IsZero() {
 			createdAt = t.CreatedAt.UTC().Format("2006-01-02 15:04:05")
 		}
-		out = append(out, OpsTaskSummary{
+		out = append(out, domain.OpsTaskSummary{
 			TaskID:      t.TaskID,
 			Status:      t.Status,
 			TriggerType: t.TriggerType,
