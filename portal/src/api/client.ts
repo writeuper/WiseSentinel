@@ -176,12 +176,7 @@ export function sendChatStream(
 ): AbortController {
   const controller = new AbortController();
   const token = getToken();
-
-  const params = new URLSearchParams();
-  params.set('session_id', sessionId);
-  params.set('question', question);
-  if (options.enable_rag !== undefined) params.set('enable_rag', String(options.enable_rag));
-  if (options.enable_tools !== undefined) params.set('enable_tools', String(options.enable_tools));
+  const apiKey = import.meta.env.VITE_DEV_API_KEY;
 
   // Use POST for SSE to match the backend API
   fetch(`${API_BASE}/chat/stream`, {
@@ -189,6 +184,7 @@ export function sendChatStream(
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(apiKey && !token ? { 'X-API-Key': apiKey } : {}),
     },
     body: JSON.stringify({
       session_id: sessionId,

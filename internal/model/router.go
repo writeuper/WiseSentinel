@@ -54,9 +54,9 @@ type ToolCallFunction struct {
 type ChatCompletionResponse struct {
 	Choices []struct {
 		Message struct {
-			Role         string `json:"role"`
-			Content      string `json:"content"`
-			ToolCalls    []ToolCall `json:"tool_calls,omitempty"`
+			Role      string     `json:"role"`
+			Content   string     `json:"content"`
+			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -69,8 +69,8 @@ type ChatCompletionResponse struct {
 
 // ToolDefinition describes a tool for the LLM function calling API.
 type ToolDefinition struct {
-	Type     string         `json:"type"`
-	Function ToolFunction   `json:"function"`
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
 }
 
 // ToolFunction describes a function in the LLM API.
@@ -88,11 +88,11 @@ type Router struct {
 
 // ProfileConfig stores resolved model profile configuration.
 type ProfileConfig struct {
-	Provider string
-	Model    string
-	APIKey   string
-	BaseURL  string
-	Timeout  time.Duration
+	Provider   string
+	Model      string
+	APIKey     string
+	BaseURL    string
+	Timeout    time.Duration
 	Dimensions int
 }
 
@@ -179,13 +179,6 @@ func (r *Router) ChatModel(ctx context.Context, profile domain.ModelProfile) (an
 		return nil, fmt.Errorf("model profile %q: base URL is required", profile)
 	}
 	return NewOpenAIEinoModel(cfg.Provider, cfg.Model, cfg.APIKey, cfg.BaseURL, cfg.Timeout), nil
-}
-
-// Embedder returns nil here; RAG embedder is managed separately in rag/embedder.
-// This satisfies the domain.ModelRouter interface.
-func (r *Router) Embedder(ctx context.Context, profile domain.ModelProfile) (any, error) {
-	_ = profile
-	return nil, fmt.Errorf("use rag/embedder directly for embedding")
 }
 
 // Ensure Router implements domain.ModelRouter.

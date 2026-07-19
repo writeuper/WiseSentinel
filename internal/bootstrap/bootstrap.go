@@ -8,8 +8,8 @@ import (
 	"time"
 
 	chatagent "wisesentinel-platform/internal/agent/chat"
-	opsagent "wisesentinel-platform/internal/agent/ops"
 	"wisesentinel-platform/internal/agent/knowledge"
+	opsagent "wisesentinel-platform/internal/agent/ops"
 	"wisesentinel-platform/internal/domain"
 	"wisesentinel-platform/internal/memory"
 	"wisesentinel-platform/internal/model"
@@ -45,6 +45,8 @@ type App struct {
 	IntentRouter domain.IntentRouter
 	SessionRepo  *repository.SessionRepo
 	OpsTaskRepo  *repository.OpsTaskRepo
+	ApprovalRepo *repository.ApprovalRepo
+	TraceRepo    *repository.AgentTraceRepo
 	OpsWorker    *task.OpsWorker
 }
 
@@ -70,6 +72,11 @@ func Init(ctx context.Context) (*App, error) {
 
 	// Tool Gateway
 	toolGateway := toolkit.NewGateway(ctx)
+
+	// Approval Repo — wire into gateway for L2 tool approval flow
+	approvalRepo := repository.NewApprovalRepo()
+	traceRepo := repository.NewAgentTraceRepo()
+	toolGateway.SetApprovalRepo(approvalRepo)
 
 	milvusClient, err := client.NewMilvusClient(ctx)
 	if err != nil {
@@ -148,6 +155,8 @@ func Init(ctx context.Context) (*App, error) {
 		IntentRouter: intentRouter,
 		SessionRepo:  sessionRepo,
 		OpsTaskRepo:  opsTaskRepo,
+		ApprovalRepo: approvalRepo,
+		TraceRepo:    traceRepo,
 		OpsWorker:    opsWorker,
 	}, nil
 }

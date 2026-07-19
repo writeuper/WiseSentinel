@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/gogf/gf/v2/database/gdb"
 	"github.com/gogf/gf/v2/frame/g"
 )
 
@@ -20,6 +21,10 @@ type OpsTask struct {
 	CreatedBy   string
 	StartedAt   *time.Time
 	FinishedAt  *time.Time
+	RetryCount  int
+	MaxRetry    int
+	TimeoutAt   *time.Time
+	LastError   string
 	CreatedAt   time.Time
 }
 
@@ -39,6 +44,7 @@ func (r *OpsTaskRepo) Create(ctx context.Context, task *OpsTask) error {
 		"status":       task.Status,
 		"trace_id":     task.TraceID,
 		"created_by":   task.CreatedBy,
+		"max_retry":    task.MaxRetry,
 	})
 	return err
 }
@@ -56,6 +62,10 @@ func (r *OpsTaskRepo) Get(ctx context.Context, tenantID, taskID string) (*OpsTas
 		CreatedBy   string     `json:"created_by"`
 		StartedAt   *time.Time `json:"started_at"`
 		FinishedAt  *time.Time `json:"finished_at"`
+		RetryCount  int        `json:"retry_count"`
+		MaxRetry    int        `json:"max_retry"`
+		TimeoutAt   *time.Time `json:"timeout_at"`
+		LastError   string     `json:"last_error"`
 		CreatedAt   time.Time  `json:"created_at"`
 	}
 	err := g.DB().Model("ws_ops_task").Ctx(ctx).
@@ -80,6 +90,10 @@ func (r *OpsTaskRepo) Get(ctx context.Context, tenantID, taskID string) (*OpsTas
 		CreatedBy:   row.CreatedBy,
 		StartedAt:   row.StartedAt,
 		FinishedAt:  row.FinishedAt,
+		RetryCount:  row.RetryCount,
+		MaxRetry:    row.MaxRetry,
+		TimeoutAt:   row.TimeoutAt,
+		LastError:   row.LastError,
 		CreatedAt:   row.CreatedAt,
 	}, nil
 }
@@ -93,7 +107,7 @@ func (r *OpsTaskRepo) ListPending(ctx context.Context, limit int) ([]*OpsTask, e
 	}
 	var tasks []*OpsTask
 	err := g.DB().Ctx(ctx).Model("ws_ops_task").
-		Where("status", "pending").
+		WhereIn("status", []string{"pending", "retrying"}).
 		Order("created_at ASC").
 		Limit(limit).
 		Scan(&tasks)
@@ -149,6 +163,18 @@ func (r *OpsTaskRepo) MarkFinished(ctx context.Context, tenantID, taskID, status
 			"result":      result,
 			"detail_json": detailJSON,
 			"finished_at": now,
+		}).Update()
+	return err
+}
+
+func (r *OpsTaskRepo) Retry(ctx context.Context, tenantID, taskID, errMsg string) error {
+	_, err := g.DB().Model("ws_ops_task").Ctx(ctx).
+		Where("tenant_id", tenantID).
+		Where("task_id", taskID).
+		Data(g.Map{
+			"status":      "retrying",
+			"retry_count": gdb.Raw("retry_count + 1"),
+			"last_error":  errMsg,
 		}).Update()
 	return err
 }

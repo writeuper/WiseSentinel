@@ -22,10 +22,10 @@ const (
 type Role string
 
 const (
-	RoleViewer         Role = "viewer"
-	RoleOperator       Role = "operator"
-	RoleSREAdmin       Role = "sre_admin"
-	RolePlatformAdmin  Role = "platform_admin"
+	RoleViewer        Role = "viewer"
+	RoleOperator      Role = "operator"
+	RoleSREAdmin      Role = "sre_admin"
+	RolePlatformAdmin Role = "platform_admin"
 )
 
 // IndexTaskStatus tracks knowledge index job state.
@@ -42,11 +42,13 @@ const (
 type OpsTaskStatus string
 
 const (
-	OpsTaskPending           OpsTaskStatus = "pending"
-	OpsTaskRunning           OpsTaskStatus = "running"
-	OpsTaskSuccess           OpsTaskStatus = "success"
-	OpsTaskFailed            OpsTaskStatus = "failed"
-	OpsTaskAwaitingApproval  OpsTaskStatus = "awaiting_approval"
+	OpsTaskPending          OpsTaskStatus = "pending"
+	OpsTaskRunning          OpsTaskStatus = "running"
+	OpsTaskRetrying         OpsTaskStatus = "retrying"
+	OpsTaskTimeout          OpsTaskStatus = "timeout"
+	OpsTaskSuccess          OpsTaskStatus = "success"
+	OpsTaskFailed           OpsTaskStatus = "failed"
+	OpsTaskAwaitingApproval OpsTaskStatus = "awaiting_approval"
 )
 
 // ApprovalStatus tracks human-in-the-loop approval state.

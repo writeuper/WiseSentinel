@@ -50,6 +50,10 @@ func loadDotEnv() error {
 		}
 		key := strings.TrimSpace(parts[0])
 		val := strings.TrimSpace(parts[1])
+		// Strip surrounding single/double quotes if present
+		if len(val) > 1 && (val[0] == '"' || val[0] == '\'') && val[0] == val[len(val)-1] {
+			val = val[1 : len(val)-1]
+		}
 		if key == "" {
 			continue
 		}

@@ -4,9 +4,9 @@ package ops
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"wisesentinel-platform/internal/domain"
 	"wisesentinel-platform/internal/pkg/apperr"
@@ -74,9 +74,8 @@ func (a *Agent) Analyze(ctx context.Context, req *domain.OpsAgentRequest) (*doma
 		return nil, apperr.Wrap(err, apperr.ErrInternal)
 	}
 
-	// 2. Async: schedule background execution and return immediately.
+	// Async tasks are persisted as pending and claimed by OpsWorker.
 	if req.Async {
-		go a.runAsync(traceID, tenantID, taskID, req)
 		return &domain.OpsAgentResponse{
 			TaskID:  taskID,
 			Status:  domain.OpsTaskPending,
@@ -84,26 +83,50 @@ func (a *Agent) Analyze(ctx context.Context, req *domain.OpsAgentRequest) (*doma
 		}, nil
 	}
 
-	// 3. Sync: run inline.
-	return a.executeSync(ctx, tenantID, taskID, traceID, req)
+	// Sync requests execute the task inline.
+	return a.executeTask(ctx, tenantID, taskID, traceID, req)
 }
 
-// executeSync runs the agent and updates the task row to success/failed.
-func (a *Agent) executeSync(ctx context.Context, tenantID, taskID, traceID string, req *domain.OpsAgentRequest) (*domain.OpsAgentResponse, error) {
-	_ = a.taskRepo.MarkRunning(ctx, tenantID, taskID)
+// ExecuteTask executes an existing persisted task. Workers must use this
+// method instead of Analyze so task execution never creates another task.
+func (a *Agent) ExecuteTask(ctx context.Context, tenantID, taskID string) (*domain.OpsAgentResponse, error) {
+	task, err := a.taskRepo.Get(ctx, tenantID, taskID)
+	if err != nil {
+		return nil, apperr.Wrap(err, apperr.ErrInternal)
+	}
+	if task == nil {
+		return nil, apperr.ErrNotFound
+	}
+	traceID := task.TraceID
+	if traceID == "" {
+		traceID = trace.NewID()
+	}
+	ctx = ctxkeys.WithTraceID(ctx, traceID)
+	return a.executeTask(ctx, tenantID, taskID, traceID, &domain.OpsAgentRequest{
+		TenantID: tenantID,
+		UserID:   task.CreatedBy,
+		Query:    task.InputQuery,
+		Async:    false,
+	})
+}
 
+func (a *Agent) executeTask(ctx context.Context, tenantID, taskID, traceID string, req *domain.OpsAgentRequest) (*domain.OpsAgentResponse, error) {
+	_ = a.taskRepo.MarkRunning(ctx, tenantID, taskID)
 	result, detail, err := a.runAgent(ctx, tenantID, req)
 	if err != nil {
 		detailJSON, _ := json.Marshal(detail)
+		status := domain.OpsTaskFailed
+		if errors.Is(err, context.DeadlineExceeded) {
+			status = domain.OpsTaskTimeout
+		}
 		_ = a.taskRepo.MarkFinished(ctx, tenantID, taskID,
-			string(domain.OpsTaskFailed), err.Error(), string(detailJSON))
+			string(status), err.Error(), string(detailJSON))
 		return nil, apperr.Wrap(err, apperr.ErrAgentFailed)
 	}
 
 	detailJSON, _ := json.Marshal(detail)
 	_ = a.taskRepo.MarkFinished(ctx, tenantID, taskID,
 		string(domain.OpsTaskSuccess), result, string(detailJSON))
-
 	return &domain.OpsAgentResponse{
 		TaskID:  taskID,
 		Status:  domain.OpsTaskSuccess,
@@ -111,26 +134,6 @@ func (a *Agent) executeSync(ctx context.Context, tenantID, taskID, traceID strin
 		Detail:  detail,
 		TraceID: traceID,
 	}, nil
-}
-
-// runAsync is the background driver for async tasks.
-func (a *Agent) runAsync(traceID, tenantID, taskID string, req *domain.OpsAgentRequest) {
-	// Use a fresh context with timeout (30 minutes max for any single ops task).
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-	defer cancel()
-
-	_ = a.taskRepo.MarkRunning(ctx, tenantID, taskID)
-
-	result, detail, err := a.runAgent(ctx, tenantID, req)
-	if err != nil {
-		detailJSON, _ := json.Marshal(detail)
-		_ = a.taskRepo.MarkFinished(ctx, tenantID, taskID,
-			string(domain.OpsTaskFailed), err.Error(), string(detailJSON))
-		return
-	}
-	detailJSON, _ := json.Marshal(detail)
-	_ = a.taskRepo.MarkFinished(ctx, tenantID, taskID,
-		string(domain.OpsTaskSuccess), result, string(detailJSON))
 }
 
 // runAgent builds and runs the Plan-Execute-Replan graph.

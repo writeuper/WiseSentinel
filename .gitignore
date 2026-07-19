@@ -19,6 +19,6 @@
 /data/
 /portal/node_modules/
 /portal/dist/
-/portal/tsconfig.tsbuildinfo
+/portal/tsconfig*.tsbuildinfo
 /docs/
 /platform

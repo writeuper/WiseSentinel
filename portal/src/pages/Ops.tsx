@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Card, Empty, Input, Select, Slider, Space, Spin, Switch, Table, Tag, Timeline, Typography, message } from 'antd';
 import { opsAnalyze, getOpsTask, listOpsTasks } from '@/api/client';
 import type { OpsAnalyzeData, OpsTaskData, OpsTaskSummary } from '@/api/types';
+import { formatTime } from '@/lib/format';
 import PageTopbar from '@/components/PageTopbar';
 
 const statusColor: Record<string, string> = {
@@ -117,7 +118,7 @@ export default function OpsPage() {
         key: 'status',
         render: (s: string) => <Tag color={statusColor[s] || 'default'}>{s}</Tag>,
       },
-      { title: '创建时间', dataIndex: 'created_at', key: 'created_at' },
+      { title: '创建时间', dataIndex: 'created_at', key: 'created_at', render: (v: string) => formatTime(v) },
       { title: '创建者', dataIndex: 'created_by', key: 'created_by' },
       {
         title: '操作',

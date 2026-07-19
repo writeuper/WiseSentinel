@@ -49,6 +49,7 @@ export default function ChatPage() {
 
   // Refs
   const abortRef = useRef<AbortController | null>(null);
+  const sendingRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -57,6 +58,16 @@ export default function ChatPage() {
     setTimeout(() => {
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
     }, 50);
+  }, []);
+
+  // Cleanup in-flight request on unmount
+  useEffect(() => {
+    return () => {
+      if (abortRef.current) {
+        abortRef.current.abort();
+        abortRef.current = null;
+      }
+    };
   }, []);
 
   // Load messages when session changes
@@ -89,7 +100,11 @@ export default function ChatPage() {
 
   // Create a new session
   const handleNewChat = useCallback(async () => {
-    if (abortRef.current) abortRef.current.abort();
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    sendingRef.current = false;
     setMessages([]);
     setSessionId(null);
     setSessionTitle('新对话');
@@ -102,8 +117,9 @@ export default function ChatPage() {
   // Send a message
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text || sending || streaming) return;
+    if (!text || sendingRef.current) return;
 
+    sendingRef.current = true;
     setInput('');
     setError(null);
 
@@ -122,6 +138,7 @@ export default function ChatPage() {
       sid = await ensureSession(text.slice(0, 30));
     } catch (err: any) {
       setError(`创建会话失败: ${err.message}`);
+      sendingRef.current = false;
       return;
     }
 
@@ -198,14 +215,26 @@ export default function ChatPage() {
           setError(errMsg);
           setStreaming(false);
           setSending(false);
+          sendingRef.current = false;
+          abortRef.current = null;
         },
         onDone: () => {
           setStreaming(false);
           setSending(false);
+          sendingRef.current = false;
+          abortRef.current = null;
         },
       };
 
-      abortRef.current = sendChatStream(sid, text, { enable_rag: enableRag, enable_tools: enableTools }, callbacks);
+      try {
+        abortRef.current = null; // Clear any stale reference
+        abortRef.current = sendChatStream(sid, text, { enable_rag: enableRag, enable_tools: enableTools }, callbacks);
+      } catch (err: any) {
+        setError(err.message || '流式请求失败');
+        setStreaming(false);
+        setSending(false);
+        sendingRef.current = false;
+      }
     } else {
       // Synchronous mode
       try {
@@ -228,9 +257,10 @@ export default function ChatPage() {
         setError(err.message || '请求失败');
       } finally {
         setSending(false);
+        sendingRef.current = false;
       }
     }
-  }, [input, sending, streaming, sessionId, ensureSession, useStream, enableRag, enableTools, scrollToBottom]);
+  }, [input, sessionId, ensureSession, useStream, enableRag, enableTools, scrollToBottom]);
 
   // Handle Enter key
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {

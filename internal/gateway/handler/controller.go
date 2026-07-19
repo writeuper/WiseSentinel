@@ -244,9 +244,29 @@ func (c *ControllerV1) Chat(ctx context.Context, req *v1.ChatReq) (*v1.ChatRes, 
 		_ = c.app.Memory.UpdateSessionTitle(ctx, tenantID, req.SessionID, title)
 	}
 
+	citations := make([]v1.CitationItem, 0, len(result.Citations))
+	for _, citation := range result.Citations {
+		citations = append(citations, v1.CitationItem{
+			DocID:   citation.DocID,
+			ChunkID: citation.ChunkID,
+			Source:  citation.Source,
+			Snippet: citation.Snippet,
+		})
+	}
+	toolCalls := make([]v1.ToolCallSummary, 0, len(result.ToolCalls))
+	for _, call := range result.ToolCalls {
+		toolCalls = append(toolCalls, v1.ToolCallSummary{
+			Tool:      call.Tool,
+			Status:    call.Status,
+			LatencyMS: call.LatencyMS,
+		})
+	}
+
 	return &v1.ChatRes{
 		SessionID: req.SessionID,
 		Answer:    result.Answer,
+		Citations: citations,
+		ToolCalls: toolCalls,
 		TraceID:   traceID,
 	}, nil
 }
@@ -482,45 +502,20 @@ func (c *ControllerV1) AlertWebhook(ctx context.Context, req *v1.AlertWebhookReq
 func (c *ControllerV1) ListApprovals(ctx context.Context, req *v1.ListApprovalsReq) (*v1.ListApprovalsRes, error) {
 	tenantID := ctxkeys.TenantIDFrom(ctx)
 
-	var items []v1.ApprovalItem
-	total := 0
-
-	// Query approvals from DB
-	type approvalRow struct {
-		ApprovalID   string `json:"approval_id"`
-		TaskID       string `json:"task_id"`
-		ApprovalType string `json:"approval_type"`
-		Status       string `json:"status"`
-		ExpiredAt    string `json:"expired_at"`
-	}
-	var rows []approvalRow
-	err := g.DB().Model("ws_approval").Ctx(ctx).
-		Where("tenant_id", tenantID).
-		Where("status", "pending").
-		OrderAsc("created_at").
-		Page(req.Page, req.Size).
-		Scan(&rows)
+	rows, total, err := c.app.ApprovalRepo.ListPending(ctx, tenantID, req.Page, req.Size)
 	if err != nil {
 		return nil, apperr.Wrap(err, apperr.ErrInternal)
 	}
 
+	items := make([]v1.ApprovalItem, 0, len(rows))
 	for _, row := range rows {
 		items = append(items, v1.ApprovalItem{
 			ApprovalID:   row.ApprovalID,
 			TaskID:       row.TaskID,
 			ApprovalType: row.ApprovalType,
 			Status:       row.Status,
-			ExpiredAt:    row.ExpiredAt,
+			ExpiredAt:    row.ExpiredAt.Format(time.RFC3339),
 		})
-	}
-
-	// Get total count
-	count, err := g.DB().Model("ws_approval").Ctx(ctx).
-		Where("tenant_id", tenantID).
-		Where("status", "pending").
-		Count()
-	if err == nil {
-		total = count
 	}
 
 	return &v1.ListApprovalsRes{Items: items, Total: total}, nil
@@ -531,20 +526,17 @@ func (c *ControllerV1) ApprovalDecision(ctx context.Context, req *v1.ApprovalDec
 	tenantID := ctxkeys.TenantIDFrom(ctx)
 	userID := ctxkeys.UserIDFrom(ctx)
 
-	now := time.Now()
-	_, err := g.DB().Model("ws_approval").Ctx(ctx).
-		Where("tenant_id", tenantID).
-		Where("approval_id", req.ApprovalID).
-		Where("status", "pending").
-		Data(g.Map{
-			"status":      req.Decision,
-			"approver_id": userID,
-			"comment":     req.Comment,
-			"updated_at":  now,
-		}).
-		Update()
+	// Validate decision value
+	if req.Decision != "approved" && req.Decision != "rejected" {
+		return nil, apperr.New(40001, 400, "decision must be 'approved' or 'rejected'")
+	}
+
+	updated, err := c.app.ApprovalRepo.Decide(ctx, tenantID, req.ApprovalID, req.Decision, userID, req.Comment)
 	if err != nil {
 		return nil, apperr.Wrap(err, apperr.ErrInternal)
+	}
+	if !updated {
+		return nil, apperr.New(40401, 404, "审批单不存在或已被处理")
 	}
 
 	return &v1.ApprovalDecisionRes{

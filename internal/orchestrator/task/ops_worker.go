@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"wisesentinel-platform/internal/domain"
+	"wisesentinel-platform/internal/pkg/ctxkeys"
 	"wisesentinel-platform/internal/repository"
 
 	"github.com/gogf/gf/v2/frame/g"
-	"github.com/gogf/gf/v2/os/gctx"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
@@ -103,21 +103,11 @@ func (w *OpsWorker) dispatch(ctx context.Context, t *repository.OpsTask) {
 		if userID == "" {
 			userID = "system"
 		}
-		req := &domain.OpsAgentRequest{
-			TenantID:      task.TenantID,
-			UserID:        userID,
-			Query:         task.InputQuery,
-			MaxIterations: 20,
-			Async:         false, // the worker always runs synchronously
-		}
 		// Inject tenant and user into the agent context.
 		runCtx = w.contextWithIdentity(runCtx, task.TenantID, userID, task.TraceID)
 
-		resp, err := w.opsAgent.Analyze(runCtx, req)
+		resp, err := w.opsAgent.ExecuteTask(runCtx, task.TenantID, task.TaskID)
 		if err != nil {
-			detailJSON := `["异步执行失败: ` + err.Error() + `"]`
-			_ = w.taskRepo.MarkFinished(runCtx, task.TenantID, task.TaskID,
-				string(domain.OpsTaskFailed), err.Error(), detailJSON)
 			g.Log().Errorf(runCtx, "OpsWorker: agent failed for %s: %v", task.TaskID, err)
 			return
 		}
@@ -126,8 +116,6 @@ func (w *OpsWorker) dispatch(ctx context.Context, t *repository.OpsTask) {
 				string(domain.OpsTaskFailed), "agent returned nil response", `["nil response"]`)
 			return
 		}
-		// The agent's own internal sync path already updated the row, but we
-		// guard against a missing update here.
 		g.Log().Infof(runCtx, "OpsWorker: finished task %s status=%s", task.TaskID, resp.Status)
 	}(*t)
 }
@@ -135,13 +123,12 @@ func (w *OpsWorker) dispatch(ctx context.Context, t *repository.OpsTask) {
 // contextWithIdentity returns a new context with the standard identity keys
 // populated so that downstream services pick them up.
 func (w *OpsWorker) contextWithIdentity(ctx context.Context, tenantID, userID, traceID string) context.Context {
-	// We don't import ctxkeys here to keep the package dependency set minimal.
-	// The agent reads tenant/user from the OpsAgentRequest directly, so we
-	// only need to provide traceID.
 	if traceID == "" {
 		traceID = uuid.NewString()
 	}
-	return gctx.WithCtx(ctx) // placeholder; trace already supplied via the request
+	ctx = ctxkeys.WithTenantID(ctx, tenantID)
+	ctx = ctxkeys.WithUserID(ctx, userID)
+	return ctxkeys.WithTraceID(ctx, traceID)
 }
 
 // releaseLock deletes the distributed lock (best-effort).

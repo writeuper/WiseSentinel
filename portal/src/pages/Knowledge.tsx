@@ -1,9 +1,10 @@
 import { DeleteOutlined, InboxOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
-import { Button, Popconfirm, Table, Tag, Upload, message } from 'antd';
+import { App, Button, Popconfirm, Table, Tag, Upload } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import type { DocumentItem } from '@/api/types';
 import { deleteDocument, getIndexTask, listDocuments, uploadDocument } from '@/api/client';
+import { formatTime } from '@/lib/format';
 import PageTopbar from '@/components/PageTopbar';
 
 const statusColor: Record<string, string> = {
@@ -16,6 +17,7 @@ const statusColor: Record<string, string> = {
 };
 
 export default function KnowledgePage() {
+  const { message } = App.useApp();
   const [docs, setDocs] = useState<DocumentItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -69,7 +71,7 @@ export default function KnowledgePage() {
       render: (s: string) => <Tag color={statusColor[s] || 'default'}>{s}</Tag>,
     },
     { title: '可见性', dataIndex: 'visibility', key: 'visibility' },
-    { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at' },
+    { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', render: (v: string) => formatTime(v) },
     {
       title: '操作',
       key: 'action',

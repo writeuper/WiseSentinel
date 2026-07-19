@@ -91,6 +91,10 @@ CREATE TABLE IF NOT EXISTS ws_ops_task (
     created_by    VARCHAR(64)  NOT NULL DEFAULT '',
     started_at    DATETIME,
     finished_at   DATETIME,
+    retry_count   INT          NOT NULL DEFAULT 0,
+    max_retry     INT          NOT NULL DEFAULT 2,
+    timeout_at    DATETIME,
+    last_error    TEXT,
     created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uk_ops_task (tenant_id, task_id),
     KEY idx_status (tenant_id, status, created_at)
@@ -128,6 +132,26 @@ CREATE TABLE IF NOT EXISTS ws_audit_log (
     KEY idx_trace (trace_id),
     KEY idx_tenant_time (tenant_id, created_at),
     KEY idx_user (tenant_id, user_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS ws_agent_trace (
+    id          BIGINT PRIMARY KEY AUTO_INCREMENT,
+    trace_id    VARCHAR(64)  NOT NULL,
+    tenant_id   VARCHAR(64)  NOT NULL,
+    user_id     VARCHAR(64)  NOT NULL DEFAULT '',
+    agent_type  VARCHAR(32)  NOT NULL,
+    session_id  VARCHAR(64)  NOT NULL DEFAULT '',
+    task_id     VARCHAR(64)  NOT NULL DEFAULT '',
+    query_text  MEDIUMTEXT,
+    status      VARCHAR(32)  NOT NULL DEFAULT 'running',
+    latency_ms  BIGINT       NOT NULL DEFAULT 0,
+    error_msg   TEXT,
+    started_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at DATETIME,
+    created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_trace (trace_id),
+    KEY idx_trace_tenant_time (tenant_id, created_at),
+    KEY idx_trace_task (tenant_id, task_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS ws_agent_config (

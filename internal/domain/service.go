@@ -149,10 +149,9 @@ const (
 	ModelProfileEmbeddingDefault ModelProfile = "embedding_default"
 )
 
-// ModelRouter resolves LLM and embedding clients by profile (implemented in M3).
+// ModelRouter resolves LLM clients by profile.
 type ModelRouter interface {
 	ChatModel(ctx context.Context, profile ModelProfile) (any, error)
-	Embedder(ctx context.Context, profile ModelProfile) (any, error)
 }
 
 // ChatOptions configures chat agent behavior.
@@ -228,6 +227,7 @@ type ChatAgent interface {
 // OpsAgent performs Ops alert analysis.
 type OpsAgent interface {
 	Analyze(ctx context.Context, req *OpsAgentRequest) (*OpsAgentResponse, error)
+	ExecuteTask(ctx context.Context, tenantID, taskID string) (*OpsAgentResponse, error)
 	GetTaskResult(ctx context.Context, tenantID, taskID string) (*OpsAgentResponse, error)
 	ListTasks(ctx context.Context, tenantID, statusFilter string, page, size int) ([]OpsTaskSummary, int, error)
 }

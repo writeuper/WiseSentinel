@@ -77,12 +77,24 @@ func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domai
 		traceID = trace.NewID()
 	}
 
+	// Create a cancellable context so Close() can terminate the goroutine.
+	ctx, cancel := context.WithCancel(ctx)
 	r := &chatStreamReader{
 		events: make(chan streamEventItem, 64),
+		cancel: cancel,
 	}
 
 	go func() {
 		defer close(r.events)
+		defer cancel()
+
+		// Check if context is already cancelled.
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
 		r.send("connected", fmt.Sprintf(`{"status":"connected","session_id":"%s"}`, req.SessionID))
 
 		// 1. Retrieve RAG docs
@@ -103,9 +115,6 @@ func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domai
 		sr, err := reactAgent.Stream(ctx, input)
 		if err != nil {
 			errMsg := fmt.Sprintf("Stream 失败: %v", err)
-			if unwrapped := fmt.Sprintf("%+v", err); unwrapped != err.Error() {
-				errMsg = fmt.Sprintf("Stream 失败: %v (detail: %s)", err, unwrapped)
-			}
 			g.Log().Errorf(ctx, "ChatAgent.Stream reactAgent.Stream error: %+v", err)
 			r.send("error", errMsg)
 			r.send("done", fmt.Sprintf(`{"trace_id":"%s"}`, traceID))
@@ -113,16 +122,48 @@ func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domai
 		}
 		defer sr.Close()
 
-		for {
-			msg, err := sr.Recv()
-			if err != nil {
-				break
+		// Use a separate goroutine for the blocking Recv so we can
+		// select on ctx.Done() for cancellation.
+		msgCh := make(chan *schema.Message, 8)
+		errCh := make(chan error, 1)
+		go func() {
+			defer func() {
+				close(msgCh)
+				close(errCh)
+			}()
+			for {
+				msg, recvErr := sr.Recv()
+				if recvErr != nil {
+					errCh <- recvErr
+					return
+				}
+				select {
+				case msgCh <- msg:
+				case <-ctx.Done():
+					return
+				}
 			}
-			if msg.Content != "" {
-				r.send("message", msg.Content)
+		}()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg, ok := <-msgCh:
+				if !ok {
+					// msgCh closed, drain errCh
+					select {
+					case <-errCh:
+					default:
+					}
+					r.send("done", fmt.Sprintf(`{"trace_id":"%s"}`, traceID))
+					return
+				}
+				if msg.Content != "" {
+					r.send("message", msg.Content)
+				}
 			}
 		}
-		r.send("done", fmt.Sprintf(`{"trace_id":"%s"}`, traceID))
 	}()
 
 	return r, nil
@@ -137,10 +178,14 @@ type streamEventItem struct {
 // chatStreamReader implements domain.StreamReader over a channel.
 type chatStreamReader struct {
 	events chan streamEventItem
+	cancel context.CancelFunc
 }
 
 func (r *chatStreamReader) send(event, data string) {
-	r.events <- streamEventItem{event: event, data: data}
+	select {
+	case r.events <- streamEventItem{event: event, data: data}:
+	default:
+	}
 }
 
 // Next returns the next event (event type, data payload, and whether more events exist).
@@ -152,8 +197,11 @@ func (r *chatStreamReader) Next() (event string, data string, ok bool) {
 	return item.event, item.data, true
 }
 
-// Close terminates the stream.
+// Close cancels the stream context, terminating the background goroutine.
 func (r *chatStreamReader) Close() error {
+	if r.cancel != nil {
+		r.cancel()
+	}
 	return nil
 }
 

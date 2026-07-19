@@ -16,6 +16,7 @@ import {
 } from 'antd';
 import { activateAgentConfig, listAgentConfigs } from '@/api/client';
 import type { AgentConfigItem } from '@/api/types';
+import { formatTime } from '@/lib/format';
 import PageTopbar from '@/components/PageTopbar';
 
 export default function AdminPage() {
@@ -107,7 +108,7 @@ export default function AdminPage() {
                   style={it.is_active ? { borderColor: '#2563EB' } : undefined}
                 >
                   <Typography.Paragraph type="secondary">
-                    创建时间：{it.created_at}
+                    创建时间：{formatTime(it.created_at)}
                   </Typography.Paragraph>
                   {it.is_active ? (
                     <Button type="default" disabled block icon={<CheckCircleOutlined />}>

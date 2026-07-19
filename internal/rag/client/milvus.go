@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"wisesentinel-platform/internal/pkg/configx"
 
@@ -51,11 +52,17 @@ func LoadConfig(ctx context.Context) Config {
 	return cfg
 }
 
+// connectTimeout is the maximum time to wait for Milvus gRPC connection.
+const connectTimeout = 5 * time.Second
+
 // NewMilvusClient connects to Milvus and ensures database/collection exist.
 func NewMilvusClient(ctx context.Context) (*MilvusClient, error) {
 	cfg := LoadConfig(ctx)
 
-	defaultClient, err := milvus.NewClient(ctx, milvus.Config{
+	connCtx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+
+	defaultClient, err := milvus.NewClient(connCtx, milvus.Config{
 		Address:  cfg.Address,
 		DBName:   "default",
 		Username: cfg.Username,
@@ -70,7 +77,7 @@ func NewMilvusClient(ctx context.Context) (*MilvusClient, error) {
 		return nil, err
 	}
 
-	agentClient, err := milvus.NewClient(ctx, milvus.Config{
+	agentClient, err := milvus.NewClient(connCtx, milvus.Config{
 		Address:  cfg.Address,
 		DBName:   cfg.DBName,
 		Username: cfg.Username,

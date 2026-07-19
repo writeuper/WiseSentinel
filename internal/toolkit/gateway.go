@@ -11,10 +11,12 @@ import (
 	"wisesentinel-platform/internal/domain"
 	"wisesentinel-platform/internal/pkg/apperr"
 	"wisesentinel-platform/internal/pkg/ctxkeys"
+	"wisesentinel-platform/internal/repository"
 	"wisesentinel-platform/internal/toolkit/adapters"
 
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/util/gconv"
+	"github.com/google/uuid"
 )
 
 // AdapterFunc is the signature for a tool adapter.
@@ -22,9 +24,10 @@ type AdapterFunc func(ctx context.Context, input json.RawMessage) (string, error
 
 // Gateway implements domain.ToolGateway.
 type Gateway struct {
-	mu       sync.RWMutex
-	tools    map[string]*domain.ToolMeta
-	adapters map[string]AdapterFunc
+	mu           sync.RWMutex
+	tools        map[string]*domain.ToolMeta
+	adapters     map[string]AdapterFunc
+	approvalRepo *repository.ApprovalRepo
 }
 
 // NewGateway creates a ToolGateway from config and registered adapters.
@@ -35,7 +38,16 @@ func NewGateway(ctx context.Context) *Gateway {
 	}
 	gw.loadToolConfig(ctx)
 	gw.registerAdapters()
+
+	// The approval repo is set via SetApprovalRepo after bootstrap.
 	return gw
+}
+
+// SetApprovalRepo wires the approval repository into the gateway.
+func (gw *Gateway) SetApprovalRepo(repo *repository.ApprovalRepo) {
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	gw.approvalRepo = repo
 }
 
 func (gw *Gateway) loadToolConfig(ctx context.Context) {
@@ -112,6 +124,7 @@ func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*
 	gw.mu.RLock()
 	meta, ok := gw.tools[req.ToolName]
 	adapter, hasAdapter := gw.adapters[req.ToolName]
+	approvalRepo := gw.approvalRepo
 	gw.mu.RUnlock()
 
 	if !ok || !meta.Enabled {
@@ -121,8 +134,25 @@ func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*
 		return nil, apperr.New(50003, 500, fmt.Sprintf("tool %q has no adapter", req.ToolName))
 	}
 
-	// RBAC check based on risk level
-	if err := gw.checkRiskLevel(ctx, meta.RiskLevel); err != nil {
+	// L2 tools: require sre_admin+ or create an approval.
+	if meta.RiskLevel == domain.ToolRiskL2Write {
+		roles := ctxkeys.RolesFrom(ctx)
+		if !hasRole(roles, domain.RoleSREAdmin, domain.RolePlatformAdmin) {
+			if approvalRepo == nil {
+				return nil, apperr.ErrForbidden
+			}
+			approvalID, err := gw.createApproval(ctx, approvalRepo, req, meta)
+			if err != nil {
+				return nil, apperr.Wrap(err, apperr.ErrInternal)
+			}
+			return &domain.ToolInvokeResponse{
+				Output:     "工具调用需要审批，已创建审批单",
+				Status:     "awaiting_approval",
+				ApprovalID: approvalID,
+			}, nil
+		}
+		// sre_admin+ falls through to execute directly.
+	} else if err := gw.checkRiskLevel(ctx, meta.RiskLevel); err != nil {
 		return nil, err
 	}
 
@@ -148,6 +178,37 @@ func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*
 		Status:    "success",
 		LatencyMS: int(latency),
 	}, nil
+}
+
+// createApproval creates a pending approval record for a high-risk tool invocation.
+func (gw *Gateway) createApproval(ctx context.Context, repo *repository.ApprovalRepo, req *domain.ToolInvokeRequest, meta *domain.ToolMeta) (string, error) {
+	tenantID := ctxkeys.TenantIDFrom(ctx)
+	if tenantID == "" {
+		tenantID = domain.DefaultTenantID
+	}
+	userID := ctxkeys.UserIDFrom(ctx)
+	approvalID := "apv_" + uuid.NewString()
+
+	payload, _ := json.Marshal(map[string]interface{}{
+		"tool_name":  req.ToolName,
+		"input":      string(req.Input),
+		"user_id":    userID,
+		"agent_type": req.AgentType,
+	})
+
+	approval := &repository.Approval{
+		TenantID:     tenantID,
+		ApprovalID:   approvalID,
+		TaskID:       req.ToolName,
+		ApprovalType: "tool_invoke",
+		PayloadJSON:  string(payload),
+		Status:       "pending",
+		ExpiredAt:    time.Now().Add(24 * time.Hour),
+	}
+	if err := repo.Create(ctx, approval); err != nil {
+		return "", err
+	}
+	return approvalID, nil
 }
 
 func (gw *Gateway) checkRiskLevel(ctx context.Context, riskLevel domain.ToolRiskLevel) error {
@@ -182,6 +243,17 @@ func agentInList(agent domain.AgentType, list []domain.AgentType) bool {
 	for _, a := range list {
 		if a == agent {
 			return true
+		}
+	}
+	return false
+}
+
+func hasRole(roles []string, allowed ...domain.Role) bool {
+	for _, role := range roles {
+		for _, allowedRole := range allowed {
+			if domain.Role(role) == allowedRole {
+				return true
+			}
 		}
 	}
 	return false
