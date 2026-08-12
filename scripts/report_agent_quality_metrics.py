@@ -98,6 +98,7 @@ def parse_prometheus(text: str) -> dict[str, Any]:
         "all_p95_ms": None if sample_count == 0 else percentile("success") if error_count == 0 else None,
         "mean_ms": round(sum(sums.values()) / sample_count * 1000, 3) if sample_count else None,
         "success_mean_ms": round(sums.get("success", 0.0) / success_count * 1000, 3) if success_count else None,
+        "p95_semantics": "histogram_bucket_upper_bound_ms" if sample_count else None,
     }
 
 
@@ -108,7 +109,7 @@ def fetch_metrics(url: str) -> dict[str, Any]:
     except Exception:
         return {"sample_count": 0, "success_sample_count": 0, "error_sample_count": 0,
                 "p95_ms": None, "success_p95_ms": None, "all_p95_ms": None,
-                "mean_ms": None, "success_mean_ms": None}
+                "mean_ms": None, "success_mean_ms": None, "p95_semantics": None}
 
 
 def aggregate() -> dict[str, Any]:
@@ -187,6 +188,8 @@ def main() -> int:
         print(f"- RAG error samples: {rag.get('error_sample_count', 0)}")
         print(f"- RAG successful retrieval P95: {rag.get('success_p95_ms') if rag.get('success_p95_ms') is not None else 'N/A'} ms")
         print(f"- RAG successful retrieval mean: {rag.get('success_mean_ms') if rag.get('success_mean_ms') is not None else 'N/A'} ms")
+        if rag.get("p95_semantics"):
+            print("- RAG P95 semantics: histogram bucket upper bound (not an exact percentile)")
         if rag["sample_count"] < 30 or rag.get("success_sample_count", 0) < 30:
             print("\n> RAG P95 is provisional when fewer than 30 total and successful retrieval samples exist; this is not a production SLA.")
     return 0

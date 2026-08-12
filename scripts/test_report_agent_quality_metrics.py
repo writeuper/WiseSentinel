@@ -29,6 +29,7 @@ ws_rag_retrieval_duration_seconds_count{outcome="error",confidence="low"} 2
         self.assertEqual(report["error_sample_count"], 2)
         self.assertEqual(report["success_p95_ms"], 250.0)
         self.assertEqual(report["success_mean_ms"], 150.0)
+        self.assertEqual(report["p95_semantics"], "histogram_bucket_upper_bound_ms")
 
     def test_empty_metrics_are_explicitly_unavailable(self):
         report = MODULE.parse_prometheus("")

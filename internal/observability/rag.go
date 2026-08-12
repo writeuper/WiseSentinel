@@ -12,9 +12,12 @@ var (
 	)
 	ragRetrieveDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name:    "ws_rag_retrieval_duration_seconds",
-			Help:    "RAG retrieval latency by stable outcome and confidence.",
-			Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15},
+			Name: "ws_rag_retrieval_duration_seconds",
+			Help: "RAG retrieval latency by stable outcome and confidence.",
+			// Keep finer buckets below one second so the development/integration
+			// report does not turn a ~200ms retrieval into a misleading 1s P95.
+			// The reported percentile remains a histogram bucket upper bound.
+			Buckets: []float64{0.01, 0.025, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.5, 0.75, 1, 2, 5, 10, 15},
 		},
 		[]string{"outcome", "confidence"},
 	)
