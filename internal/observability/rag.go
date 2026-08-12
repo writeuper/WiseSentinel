@@ -33,10 +33,10 @@ var (
 		Name: "ws_rag_active_legacy_documents",
 		Help: "Active RAG documents without a published generation, whose physical vector count is not known from generation state.",
 	})
-	ragInventoryRefreshErrors = prometheus.NewCounter(prometheus.CounterOpts{
+	ragInventoryRefreshErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "ws_rag_inventory_refresh_errors_total",
 		Help: "Failures refreshing the aggregate RAG logical inventory before metric exposition.",
-	})
+	}, []string{"stage"})
 	ragPhysicalVectors = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "ws_rag_physical_vectors",
 		Help: "Physical rows in the configured Milvus collection across all tenants; may include legacy, superseded and pending-GC vectors.",
@@ -81,7 +81,12 @@ func SetRAGInventory(activeDocuments, activePublishedChunks, activeLegacyDocumen
 	ragActiveLegacyDocuments.Set(float64(activeLegacyDocuments))
 }
 
-func ObserveRAGInventoryRefreshError() { ragInventoryRefreshErrors.Inc() }
+func ObserveRAGInventoryRefreshError(stage string) {
+	if stage != "logical" && stage != "physical" {
+		stage = "logical"
+	}
+	ragInventoryRefreshErrors.WithLabelValues(stage).Inc()
+}
 
 func ObserveMilvusReconnect(outcome string) {
 	if outcome != "success" && outcome != "failure" {

@@ -62,6 +62,35 @@ func TestRAGInventoryMetricsAreUnlabelledAggregates(t *testing.T) {
 	}
 }
 
+func TestRAGInventoryRefreshErrorsUseBoundedStages(t *testing.T) {
+	ObserveRAGInventoryRefreshError("logical")
+	ObserveRAGInventoryRefreshError("physical")
+	ObserveRAGInventoryRefreshError("secret-stage")
+	families, err := Registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, family := range families {
+		if family.GetName() != "ws_rag_inventory_refresh_errors_total" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			if len(metric.Label) != 1 || metric.Label[0].GetName() != "stage" {
+				t.Fatalf("unexpected inventory error labels: %#v", metric.Label)
+			}
+			stage := metric.Label[0].GetValue()
+			if stage != "logical" && stage != "physical" {
+				t.Fatalf("unbounded inventory stage %q", stage)
+			}
+			seen[stage] = metric.Counter.GetValue() >= 1
+		}
+	}
+	if !seen["logical"] || !seen["physical"] {
+		t.Fatalf("inventory error stages missing: %#v", seen)
+	}
+}
+
 func TestMilvusReconnectMetricsUseBoundedOutcomes(t *testing.T) {
 	ObserveMilvusReconnect("success")
 	ObserveMilvusReconnect("failure")

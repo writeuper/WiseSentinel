@@ -329,7 +329,7 @@ func (a *App) RefreshRAGInventory(ctx context.Context) {
 	}
 	inventory, err := a.Documents.ActiveRAGInventory(ctx)
 	if err != nil {
-		observability.ObserveRAGInventoryRefreshError()
+		observability.ObserveRAGInventoryRefreshError("logical")
 		return
 	}
 	observability.SetRAGInventory(inventory.ActiveDocuments, inventory.ActivePublishedChunks, inventory.ActiveLegacyDocuments)
@@ -338,7 +338,7 @@ func (a *App) RefreshRAGInventory(ctx context.Context) {
 	}
 	count, err := a.Milvus.PhysicalVectorCount(ctx)
 	if err != nil {
-		observability.ObserveRAGInventoryRefreshError()
+		observability.ObserveRAGInventoryRefreshError("physical")
 		return
 	}
 	observability.SetRAGPhysicalVectors(count)
