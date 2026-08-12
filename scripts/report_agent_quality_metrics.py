@@ -53,30 +53,52 @@ def safe_float(value: str | None) -> float:
 
 
 def parse_prometheus(text: str) -> dict[str, Any]:
-    """Calculate histogram P95 from cumulative *_bucket samples."""
-    buckets: dict[float, float] = defaultdict(float)
-    count = 0.0
-    total = 0.0
+    """Calculate success/error-aware P95 from cumulative histogram samples.
+
+    A histogram with a sparse bucket layout can legitimately reach P95 only at
+    ``+Inf``. In that case the reported P95 is ``None`` rather than pretending
+    the last finite bucket is an exact percentile.
+    """
+    buckets_by_outcome: dict[str, dict[float, float]] = defaultdict(lambda: defaultdict(float))
+    sums: dict[str, float] = defaultdict(float)
+    totals: dict[str, float] = defaultdict(float)
     for line in text.splitlines():
         if line.startswith("#") or "ws_rag_retrieval_duration_seconds" not in line:
             continue
+        outcome_match = re.search(r'outcome="([^"]+)"', line)
+        outcome = outcome_match.group(1) if outcome_match else "unknown"
         if "_bucket{" in line:
             match = re.search(r'le="([^"]+)"[^ ]*\s+([0-9.eE+-]+)$', line)
             if match:
                 bound = float("inf") if match.group(1) == "+Inf" else float(match.group(1))
-                # Prometheus emits one cumulative histogram per stable label
-                # combination; aggregate equivalent bucket bounds first.
-                buckets[bound] += safe_float(match.group(2))
+                buckets_by_outcome[outcome][bound] += safe_float(match.group(2))
         elif "_count" in line:
-            total += safe_float(line.rsplit(" ", 1)[-1])
+            totals[outcome] += safe_float(line.rsplit(" ", 1)[-1])
         elif "_sum" in line:
-            count += safe_float(line.rsplit(" ", 1)[-1])
-    if not buckets:
-        return {"sample_count": int(total), "p95_ms": None, "mean_ms": None}
-    target = total * 0.95
-    p95 = next((bound for bound, value in sorted(buckets.items()) if value >= target), None)
-    return {"sample_count": int(total), "p95_ms": None if p95 is None or p95 == float("inf") else round(p95 * 1000, 3),
-            "mean_ms": round(count / total * 1000, 3) if total else None}
+            sums[outcome] += safe_float(line.rsplit(" ", 1)[-1])
+
+    def percentile(outcome: str) -> float | None:
+        total = totals.get(outcome, 0.0)
+        buckets = buckets_by_outcome.get(outcome, {})
+        if not total or not buckets:
+            return None
+        target = total * 0.95
+        bound = next((item for item, value in sorted(buckets.items()) if value >= target), None)
+        return None if bound is None or bound == float("inf") else round(bound * 1000, 3)
+
+    sample_count = int(sum(totals.values()))
+    success_count = int(totals.get("success", 0.0))
+    error_count = int(totals.get("error", 0.0))
+    return {
+        "sample_count": sample_count,
+        "success_sample_count": success_count,
+        "error_sample_count": error_count,
+        "p95_ms": percentile("success"),
+        "success_p95_ms": percentile("success"),
+        "all_p95_ms": None if sample_count == 0 else percentile("success") if error_count == 0 else None,
+        "mean_ms": round(sum(sums.values()) / sample_count * 1000, 3) if sample_count else None,
+        "success_mean_ms": round(sums.get("success", 0.0) / success_count * 1000, 3) if success_count else None,
+    }
 
 
 def fetch_metrics(url: str) -> dict[str, Any]:
@@ -84,7 +106,9 @@ def fetch_metrics(url: str) -> dict[str, Any]:
         with urllib.request.urlopen(url, timeout=10) as response:
             return parse_prometheus(response.read().decode("utf-8", "replace"))
     except Exception:
-        return {"sample_count": 0, "p95_ms": None, "mean_ms": None}
+        return {"sample_count": 0, "success_sample_count": 0, "error_sample_count": 0,
+                "p95_ms": None, "success_p95_ms": None, "all_p95_ms": None,
+                "mean_ms": None, "success_mean_ms": None}
 
 
 def aggregate() -> dict[str, Any]:
@@ -159,9 +183,12 @@ def main() -> int:
         print(f"- Tool success rate: {report['tool_calls']['success_rate'] if report['tool_calls']['success_rate'] is not None else 'N/A'}%")
         rag = report["rag_retrieval"]
         print(f"- RAG retrieval samples: {rag['sample_count']}")
-        print(f"- RAG retrieval P95: {rag['p95_ms'] if rag['p95_ms'] is not None else 'N/A'} ms")
-        if rag["sample_count"] < 30:
-            print("\n> RAG P95 is provisional/N/A when fewer than 30 valid retrieval samples exist; this is not a production SLA.")
+        print(f"- RAG successful samples: {rag.get('success_sample_count', 0)}")
+        print(f"- RAG error samples: {rag.get('error_sample_count', 0)}")
+        print(f"- RAG successful retrieval P95: {rag.get('success_p95_ms') if rag.get('success_p95_ms') is not None else 'N/A'} ms")
+        print(f"- RAG successful retrieval mean: {rag.get('success_mean_ms') if rag.get('success_mean_ms') is not None else 'N/A'} ms")
+        if rag["sample_count"] < 30 or rag.get("success_sample_count", 0) < 30:
+            print("\n> RAG P95 is provisional when fewer than 30 total and successful retrieval samples exist; this is not a production SLA.")
     return 0
 
 
