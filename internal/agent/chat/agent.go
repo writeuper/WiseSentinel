@@ -61,6 +61,20 @@ func isCurrentTimeQuery(query string) bool {
 	return strings.Contains(query, "北京时间") || strings.Contains(query, "当前时间") || strings.Contains(query, "现在几点") || strings.Contains(lower, "current time")
 }
 
+// isPlatformRoleQuery identifies questions about the platform's configured
+// collaborating Agent roles. These are product metadata questions and should
+// not be answered from operational Runbook retrieval results.
+func isPlatformRoleQuery(query string) bool {
+	q := strings.ToLower(strings.TrimSpace(query))
+	return strings.Contains(q, "agent角色") ||
+		strings.Contains(q, "agent 角色") ||
+		(strings.Contains(q, "角色") && (strings.Contains(q, "协作") || strings.Contains(q, "有哪些") || strings.Contains(q, "支持")))
+}
+
+func platformRoleAnswer() string {
+	return "平台当前支持以下 Agent 角色协作：资深 Agent 架构师、资深 Golang 后端开发工程师、资深前端工程师、自动化测试工程师。架构师负责方案与边界设计，后端和前端负责实现，测试工程师负责自动化验证、评测与回归修复；实际可用角色以租户配置和权限为准。"
+}
+
 func (a *Agent) currentTimeEvidence(ctx context.Context, req *domain.ChatAgentRequest) (*domain.ToolInvokeResponse, error) {
 	if a.toolGateway == nil {
 		return nil, fmt.Errorf("tool gateway is unavailable")
@@ -132,6 +146,11 @@ func (a *Agent) Invoke(ctx context.Context, req *domain.ChatAgentRequest) (*doma
 		}
 		answer := formatCurrentTimeAnswer(toolResult.Output)
 		return &domain.ChatAgentResponse{SessionID: req.SessionID, Answer: answer, ToolCalls: []domain.ToolCallSummary{{Tool: "get_current_time", Status: toolResult.Status, LatencyMS: toolResult.LatencyMS}}, TraceID: traceID}, nil
+	}
+	if isPlatformRoleQuery(req.Query) {
+		answer := platformRoleAnswer()
+		a.recordStep(ctx, traceID, req, "capability", "static_platform_roles", req.Query, answer, "success", 0, "")
+		return &domain.ChatAgentResponse{SessionID: req.SessionID, Answer: answer, TraceID: traceID}, nil
 	}
 
 	// 1. Retrieve RAG documents and collect citations when enabled
@@ -242,6 +261,13 @@ func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domai
 			})
 			r.send("tool", string(toolPayload))
 			answer := formatCurrentTimeAnswer(toolResult.Output)
+			r.send("message", answer)
+			r.send("done", fmt.Sprintf(`{"trace_id":"%s"}`, traceID))
+			return
+		}
+		if isPlatformRoleQuery(req.Query) {
+			answer := platformRoleAnswer()
+			a.recordStep(ctx, traceID, req, "capability", "static_platform_roles", req.Query, answer, "success", 0, "")
 			r.send("message", answer)
 			r.send("done", fmt.Sprintf(`{"trace_id":"%s"}`, traceID))
 			return

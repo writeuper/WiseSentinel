@@ -25,6 +25,21 @@ func TestIsModelOverloadedErrorRecognizesTypedAndEinoFormattedError(t *testing.T
 	}
 }
 
+func TestPlatformRoleQueryUsesAuditableStaticCapabilityAnswer(t *testing.T) {
+	if !isPlatformRoleQuery("平台支持哪些 Agent 角色协作") {
+		t.Fatal("role collaboration query was not recognized")
+	}
+	if isPlatformRoleQuery("如何排查 API 5xx") {
+		t.Fatal("operational query was recognized as platform role metadata")
+	}
+	answer := platformRoleAnswer()
+	for _, role := range []string{"架构师", "Golang 后端", "前端", "自动化测试"} {
+		if !strings.Contains(answer, role) {
+			t.Fatalf("answer missing role %q: %s", role, answer)
+		}
+	}
+}
+
 func TestStreamErrorDataOnlyExposesKnownOverloadAsStructuredData(t *testing.T) {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(streamErrorData(apperr.ErrModelOverloaded, "fallback")), &payload); err != nil {
