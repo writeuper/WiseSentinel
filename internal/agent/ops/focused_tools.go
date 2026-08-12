@@ -123,6 +123,9 @@ func focusedToolRequests(query string) ([]focusedToolRequest, bool) {
 	if containsAny(query, "结合告警、日志和指标", "告警、日志和指标", "告警日志指标") {
 		return []focusedToolRequest{alerts(), logs(), metrics()}, true
 	}
+	if containsAny(query, "检索日志", "查询日志", "查日志", "日志确认", "日志检索") {
+		return []focusedToolRequest{logs()}, true
+	}
 
 	needsCorrelation := strings.Contains(query, "Redis") || strings.Contains(query, "redis") || strings.Contains(lower, "timeout") || strings.Contains(query, "超时") || strings.Contains(query, "间歇") || strings.Contains(query, "偶发") || strings.Contains(lower, "intermittent") || strings.Contains(lower, "flaky")
 	switch {
