@@ -546,3 +546,49 @@ func TestDeleteLegacyByDocIDIntegration(t *testing.T) {
 		t.Fatalf("legacy retrieval after delete = %#v, want no hits", after.Documents)
 	}
 }
+
+// TestDeleteLegacyByDocIDExactPageBoundaryIntegration protects the cleanup
+// loop when Milvus returns exactly one full page. A prior implementation
+// returned from the scan on the empty second page before deleting IDs already
+// collected from page one, leaving all 512 legacy vectors behind.
+func TestDeleteLegacyByDocIDExactPageBoundaryIntegration(t *testing.T) {
+	_, _, idx, cleanup := setupRAG(t)
+	defer cleanup()
+
+	ctx := gctx.New()
+	tenantID := "it-legacy-boundary-" + uuid.NewString()[:8]
+	docID := uuid.NewString()
+	source := filepath.Join(t.TempDir(), "legacy-boundary.md")
+	if err := repository.NewDocumentRepo().Create(ctx, &repository.Document{
+		TenantID: tenantID, DocID: docID, Name: "legacy-boundary.md", SourceURI: source,
+		MimeType: "text/markdown", Visibility: "tenant", SecretLevel: domain.SecretLevelInternal, Status: "active", CreatedBy: "integration-test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = idx.DeleteByDocID(ctx, tenantID, docID)
+		_, _ = g.DB().Ctx(ctx).Model("ws_document_index_state").Where("tenant_id", tenantID).Delete()
+		_, _ = g.DB().Ctx(ctx).Model("ws_document").Where("tenant_id", tenantID).Delete()
+	})
+
+	inputs := make([]indexer.ChunkInput, 512)
+	for i := range inputs {
+		inputs[i] = indexer.ChunkInput{
+			ChunkID:    fmt.Sprintf("legacy-boundary-%03d-%s", i, uuid.NewString()),
+			Content:    fmt.Sprintf("legacy page-boundary cleanup phrase %03d", i),
+			ChunkIndex: i, TenantID: tenantID, DocID: docID, Source: source,
+			Visibility: "tenant", SecretLevel: domain.SecretLevelInternal,
+		}
+	}
+	if count, err := idx.IndexChunks(ctx, inputs); err != nil || count != len(inputs) {
+		t.Fatalf("index exact-page legacy vectors count=%d err=%v", count, err)
+	}
+	if err := idx.DeleteLegacyByDocID(ctx, tenantID, docID); err != nil {
+		t.Fatalf("delete exact-page legacy vectors: %v", err)
+	}
+	// A second delete must remain idempotent and confirms the first operation
+	// removed the complete page rather than only acknowledging the scan.
+	if err := idx.DeleteLegacyByDocID(ctx, tenantID, docID); err != nil {
+		t.Fatalf("repeat exact-page legacy delete: %v", err)
+	}
+}

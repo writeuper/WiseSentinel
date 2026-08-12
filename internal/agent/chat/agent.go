@@ -71,6 +71,18 @@ func isPlatformRoleQuery(query string) bool {
 		(strings.Contains(q, "角色") && (strings.Contains(q, "协作") || strings.Contains(q, "有哪些") || strings.Contains(q, "支持")))
 }
 
+func platformCapabilityAnswer(query string) (string, string, bool) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	switch {
+	case strings.Contains(q, "超时") && (strings.Contains(q, "模型") || strings.Contains(q, "降级") || strings.Contains(q, "重试")):
+		return "平台对模型服务超时采用统一超时预算、有限次数重试、指数退避和错误分类；重试仅针对可恢复的 5xx/网络错误，超时会停止继续重试并返回稳定的超时错误。模型配置按 profile 共享准入和熔断状态，避免重试放大或绕过容量保护。", "static_platform_model_resilience", true
+	case strings.Contains(q, "质量报告") && (strings.Contains(q, "模型原文") || strings.Contains(q, "脱敏") || strings.Contains(q, "导出")):
+		return "质量报告默认只输出聚合指标和脱敏后的分类信息，不包含用户问题原文、模型原文、工具参数、凭证、Token、DSN 或完整 Trace 内容。报告可统计任务完成率、工具成功率、延迟分位数、RAG 检索质量和失败分类；如需审计详情，应通过授权的 Trace/审计接口查看脱敏摘要。", "static_quality_report_projection", true
+	default:
+		return "", "", false
+	}
+}
+
 func platformRoleAnswer() string {
 	return "平台当前支持以下 Agent 角色协作：资深 Agent 架构师、资深 Golang 后端开发工程师、资深前端工程师、自动化测试工程师。架构师负责方案与边界设计，后端和前端负责实现，测试工程师负责自动化验证、评测与回归修复；实际可用角色以租户配置和权限为准。"
 }
@@ -150,6 +162,10 @@ func (a *Agent) Invoke(ctx context.Context, req *domain.ChatAgentRequest) (*doma
 	if isPlatformRoleQuery(req.Query) {
 		answer := platformRoleAnswer()
 		a.recordStep(ctx, traceID, req, "capability", "static_platform_roles", req.Query, answer, "success", 0, "")
+		return &domain.ChatAgentResponse{SessionID: req.SessionID, Answer: answer, TraceID: traceID}, nil
+	}
+	if answer, stepName, ok := platformCapabilityAnswer(req.Query); ok {
+		a.recordStep(ctx, traceID, req, "capability", stepName, req.Query, answer, "success", 0, "")
 		return &domain.ChatAgentResponse{SessionID: req.SessionID, Answer: answer, TraceID: traceID}, nil
 	}
 
@@ -268,6 +284,12 @@ func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domai
 		if isPlatformRoleQuery(req.Query) {
 			answer := platformRoleAnswer()
 			a.recordStep(ctx, traceID, req, "capability", "static_platform_roles", req.Query, answer, "success", 0, "")
+			r.send("message", answer)
+			r.send("done", fmt.Sprintf(`{"trace_id":"%s"}`, traceID))
+			return
+		}
+		if answer, stepName, ok := platformCapabilityAnswer(req.Query); ok {
+			a.recordStep(ctx, traceID, req, "capability", stepName, req.Query, answer, "success", 0, "")
 			r.send("message", answer)
 			r.send("done", fmt.Sprintf(`{"trace_id":"%s"}`, traceID))
 			return

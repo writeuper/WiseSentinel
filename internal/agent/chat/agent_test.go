@@ -40,6 +40,30 @@ func TestPlatformRoleQueryUsesAuditableStaticCapabilityAnswer(t *testing.T) {
 	}
 }
 
+func TestPlatformCapabilityAnswersAvoidOperationalRAGForResilienceAndReports(t *testing.T) {
+	tests := []struct {
+		query, step string
+		keywords    []string
+	}{
+		{"模型服务超时如何降级和重试", "static_platform_model_resilience", []string{"超时", "有限次数重试", "熔断"}},
+		{"如何导出不包含模型原文的质量报告", "static_quality_report_projection", []string{"聚合指标", "脱敏", "Token"}},
+	}
+	for _, tc := range tests {
+		answer, step, ok := platformCapabilityAnswer(tc.query)
+		if !ok || step != tc.step {
+			t.Fatalf("query %q classified as ok=%t step=%q, want %q", tc.query, ok, step, tc.step)
+		}
+		for _, keyword := range tc.keywords {
+			if !strings.Contains(answer, keyword) {
+				t.Fatalf("query %q answer missing %q: %s", tc.query, keyword, answer)
+			}
+		}
+	}
+	if _, _, ok := platformCapabilityAnswer("如何排查 Redis timeout"); ok {
+		t.Fatal("component operational query must remain on RAG/ops path")
+	}
+}
+
 func TestStreamErrorDataOnlyExposesKnownOverloadAsStructuredData(t *testing.T) {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(streamErrorData(apperr.ErrModelOverloaded, "fallback")), &payload); err != nil {

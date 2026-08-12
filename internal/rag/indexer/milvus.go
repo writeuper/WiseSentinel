@@ -87,7 +87,10 @@ func (i *MilvusIndexer) DeleteLegacyByDocID(ctx context.Context, tenantID, docID
 			return err
 		}
 		if result.Len() == 0 {
-			return nil
+			// A zero-length page is the normal terminator when the number of
+			// matching rows is an exact multiple of pageSize. Do not return here:
+			// IDs collected from prior pages still need the delete pass below.
+			break
 		}
 		idColumn, ok := result.GetColumn("id").(*entity.ColumnVarChar)
 		if !ok {
