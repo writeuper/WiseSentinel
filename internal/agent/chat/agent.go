@@ -161,6 +161,8 @@ func platformCapabilityAnswer(query string) (string, string, bool) {
 		return "平台对模型服务超时采用统一超时预算、有限次数重试、指数退避和错误分类；重试仅针对可恢复的 5xx/网络错误，超时会停止继续重试并返回稳定的超时错误。模型配置按 profile 共享准入和熔断状态，避免重试放大或绕过容量保护。", "static_platform_model_resilience", true
 	case strings.Contains(q, "质量报告") && (strings.Contains(q, "模型原文") || strings.Contains(q, "脱敏") || strings.Contains(q, "导出")):
 		return "质量报告默认只输出聚合指标和脱敏后的分类信息，不包含用户问题原文、模型原文、工具参数、凭证、Token、DSN 或完整 Trace 内容。报告可统计任务完成率、工具成功率、延迟分位数、RAG 检索质量和失败分类；如需审计详情，应通过授权的 Trace/审计接口查看脱敏摘要。", "static_quality_report_projection", true
+	case strings.Contains(q, "模型输出") && (strings.Contains(q, "脱敏") || strings.Contains(q, "敏感信息")):
+		return "平台在模型输出进入会话、SSE、Trace、工具审计和质量报告前执行分层脱敏：凭证、Token、DSN、密码和疑似 PII 只保留受控摘要或分类；原始模型内容不进入运营指标和普通审计投影。需要审计时通过授权接口查看最小化摘要，并以 Trace ID 关联，不在前端直接展示敏感原文。", "static_model_output_redaction", true
 	case strings.Contains(q, "评测") && (strings.Contains(q, "case") || strings.Contains(q, "用例")) && (strings.Contains(q, "配置") || strings.Contains(q, "创建") || strings.Contains(q, "新增")):
 		return "新增 Agent 评测 Case 时，建议为每条 Case 配置唯一 case_id、场景和输入，明确 expected_route、expected_tools、forbidden_tools、expected_source、expected_knowledge 与 expected_keywords，并为通过条件设置可审计断言。提交前先在隔离集成租户执行单条回归，再纳入 100+ 冻结评测集；工具断言必须以持久化 Trace Step 为准，不能只匹配模型文本。", "static_eval_case_configuration", true
 	default:

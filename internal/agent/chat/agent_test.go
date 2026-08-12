@@ -48,6 +48,7 @@ func TestPlatformCapabilityAnswersAvoidOperationalRAGForResilienceAndReports(t *
 		{"如何查看 Agent 的平均执行步数", "static_agent_step_metrics", []string{"平均 Trace 步数", "最小值", "最大值"}},
 		{"模型服务超时如何降级和重试", "static_platform_model_resilience", []string{"超时", "有限次数重试", "熔断"}},
 		{"如何导出不包含模型原文的质量报告", "static_quality_report_projection", []string{"聚合指标", "脱敏", "Token"}},
+		{"企业平台如何对模型输出做敏感信息脱敏", "static_model_output_redaction", []string{"SSE", "Trace", "Token"}},
 		{"如何配置一个新的 Agent 评测 Case", "static_eval_case_configuration", []string{"case_id", "expected_route", "持久化 Trace Step"}},
 	}
 	for _, tc := range tests {
