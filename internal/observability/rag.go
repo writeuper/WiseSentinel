@@ -41,10 +41,17 @@ var (
 		Name: "ws_rag_physical_vectors",
 		Help: "Physical rows in the configured Milvus collection across all tenants; may include legacy, superseded and pending-GC vectors.",
 	})
+	milvusReconnects = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ws_milvus_reconnects_total",
+			Help: "Milvus SDK reconnect attempts after a failed health probe, by bounded outcome.",
+		},
+		[]string{"outcome"},
+	)
 )
 
 func init() {
-	Registry.MustRegister(ragRetrieveTotal, ragRetrieveDuration, ragActiveDocuments, ragActivePublishedChunks, ragActiveLegacyDocuments, ragInventoryRefreshErrors, ragPhysicalVectors)
+	Registry.MustRegister(ragRetrieveTotal, ragRetrieveDuration, ragActiveDocuments, ragActivePublishedChunks, ragActiveLegacyDocuments, ragInventoryRefreshErrors, ragPhysicalVectors, milvusReconnects)
 }
 
 // ObserveRAGRetrieve records a retrieval without tenant, query, document, or
@@ -75,6 +82,13 @@ func SetRAGInventory(activeDocuments, activePublishedChunks, activeLegacyDocumen
 }
 
 func ObserveRAGInventoryRefreshError() { ragInventoryRefreshErrors.Inc() }
+
+func ObserveMilvusReconnect(outcome string) {
+	if outcome != "success" && outcome != "failure" {
+		outcome = "failure"
+	}
+	milvusReconnects.WithLabelValues(outcome).Inc()
+}
 
 func SetRAGPhysicalVectors(count int) {
 	if count >= 0 {

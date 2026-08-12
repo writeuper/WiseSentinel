@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"wisesentinel-platform/internal/observability"
 	"wisesentinel-platform/internal/pkg/configx"
 
 	"github.com/gogf/gf/v2/frame/g"
@@ -241,6 +242,7 @@ func (m *MilvusClient) reconnect(ctx context.Context) error {
 	}
 	next, err := newMilvusClient(ctx, m.cfg)
 	if err != nil {
+		observability.ObserveMilvusReconnect("failure")
 		return err
 	}
 	old := m.client
@@ -248,6 +250,7 @@ func (m *MilvusClient) reconnect(ctx context.Context) error {
 	if old != nil {
 		old.Close()
 	}
+	observability.ObserveMilvusReconnect("success")
 	return nil
 }
 

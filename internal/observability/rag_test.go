@@ -61,3 +61,32 @@ func TestRAGInventoryMetricsAreUnlabelledAggregates(t *testing.T) {
 		t.Fatalf("missing inventory metrics: %#v", want)
 	}
 }
+
+func TestMilvusReconnectMetricsUseBoundedOutcomes(t *testing.T) {
+	ObserveMilvusReconnect("success")
+	ObserveMilvusReconnect("failure")
+	ObserveMilvusReconnect("raw-upstream-error")
+	families, err := Registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, family := range families {
+		if family.GetName() != "ws_milvus_reconnects_total" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			if len(metric.Label) != 1 || metric.Label[0].GetName() != "outcome" {
+				t.Fatalf("unexpected reconnect labels: %#v", metric.Label)
+			}
+			outcome := metric.Label[0].GetValue()
+			if outcome != "success" && outcome != "failure" {
+				t.Fatalf("unbounded reconnect outcome %q", outcome)
+			}
+			seen[outcome] = metric.Counter.GetValue() >= 1
+		}
+	}
+	if !seen["success"] || !seen["failure"] {
+		t.Fatalf("reconnect outcomes missing: %#v", seen)
+	}
+}
