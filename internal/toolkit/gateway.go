@@ -118,6 +118,11 @@ func (gw *Gateway) registerAdapters() {
 	gw.adapters["query_prometheus_alerts"] = adapters.QueryPrometheusAlerts
 	gw.adapters["query_metric_range"] = adapters.QueryMetricRange
 	gw.adapters["get_current_time"] = adapters.GetCurrentTime
+	// Keep the MCP-compatible time tool names available during optional MCP
+	// degradation. Bootstrap replaces these adapters with the real MCP client
+	// when it starts successfully.
+	gw.adapters["mcp_time_get_current_time"] = adapters.GetCurrentTime
+	gw.adapters["mcp_time_convert_time"] = adapters.ConvertTime
 	gw.adapters["query_logs"] = adapters.NewQueryLogs()
 	gw.adapters["search_logs"] = adapters.NewSearchLogs()
 	gw.adapters["query_logs_by_trace"] = adapters.NewQueryLogsByTrace()

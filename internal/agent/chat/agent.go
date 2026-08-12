@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 
@@ -61,6 +62,81 @@ func isCurrentTimeQuery(query string) bool {
 	return strings.Contains(query, "北京时间") || strings.Contains(query, "当前时间") || strings.Contains(query, "现在几点") || strings.Contains(lower, "current time")
 }
 
+func isTimeConversionQuery(query string) bool {
+	q := strings.ToLower(strings.TrimSpace(query))
+	return strings.Contains(q, "转换") || strings.Contains(q, "时区") || strings.Contains(q, "跨区") || strings.Contains(q, "utc") || strings.Contains(q, "东部")
+}
+
+func timeConversionTarget(query string) string {
+	q := strings.ToLower(query)
+	switch {
+	case strings.Contains(q, "美国东部") || strings.Contains(q, "东部") || strings.Contains(q, "eastern"):
+		return "America/New_York"
+	case strings.Contains(q, "utc") && !strings.Contains(q, "utc+8"):
+		return "UTC"
+	default:
+		return "Asia/Shanghai"
+	}
+}
+
+func (a *Agent) timeConversionEvidence(ctx context.Context, req *domain.ChatAgentRequest) (*domain.ToolInvokeResponse, error) {
+	if a.toolGateway == nil {
+		return nil, fmt.Errorf("tool gateway is unavailable")
+	}
+	tenantID := req.TenantID
+	if tenantID == "" {
+		tenantID = ctxkeys.TenantIDFrom(ctx)
+	}
+	conversionTime := time.Now().In(mustLoadShanghai()).Format("2006-01-02 15:04:05")
+	if explicit := extractConversionTime(req.Query); explicit != "" {
+		conversionTime = explicit
+	}
+	input, err := json.Marshal(map[string]string{
+		"source_timezone": "Asia/Shanghai",
+		"time":            conversionTime,
+		"target_timezone": timeConversionTarget(req.Query),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return a.toolGateway.Invoke(ctx, &domain.ToolInvokeRequest{
+		TenantID: tenantID, UserID: ctxkeys.UserIDFrom(ctx), TraceID: ctxkeys.TraceIDFrom(ctx),
+		ToolName: "mcp_time_convert_time", Input: input, AgentType: domain.AgentTypeChat,
+	})
+}
+
+func mustLoadShanghai() *time.Location {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		return time.FixedZone("CST", 8*60*60)
+	}
+	return loc
+}
+
+var conversionTimePattern = regexp.MustCompile(`\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:?\d{2})?)?\b`)
+
+func extractConversionTime(query string) string {
+	match := conversionTimePattern.FindString(query)
+	if match == "" || len(match) == len("2006-01-02") {
+		return ""
+	}
+	return strings.Replace(match, "T", " ", 1)
+}
+
+func formatConvertedTimeAnswer(output string) string {
+	var evidence struct {
+		SourceTimezone string `json:"source_timezone"`
+		TargetTimezone string `json:"target_timezone"`
+		SourceTime     string `json:"source_time"`
+		Time           string `json:"time"`
+		RFC3339        string `json:"rfc3339"`
+	}
+	if err := json.Unmarshal([]byte(output), &evidence); err != nil || evidence.Time == "" {
+		return output
+	}
+	return fmt.Sprintf("时间转换结果：%s（%s）→ %s（%s）。RFC3339：%s。证据来源：local time conversion service（source: local）。", evidence.SourceTime, evidence.SourceTimezone, evidence.Time, evidence.TargetTimezone, evidence.RFC3339)
+}
+
 // isPlatformRoleQuery identifies questions about the platform's configured
 // collaborating Agent roles. These are product metadata questions and should
 // not be answered from operational Runbook retrieval results.
@@ -74,6 +150,8 @@ func isPlatformRoleQuery(query string) bool {
 func platformCapabilityAnswer(query string) (string, string, bool) {
 	q := strings.ToLower(strings.TrimSpace(query))
 	switch {
+	case strings.Contains(q, "平均执行步数") || strings.Contains(q, "平均步数") || (strings.Contains(q, "执行步数") && strings.Contains(q, "查看")):
+		return "平台通过持久化 Trace Step 统计 Agent 执行步数。质量聚合报告会输出平均 Trace 步数、最小值和最大值；也可以在授权的 Trace 详情中查看单次任务的步骤明细。步数统计包含路由、RAG、模型、Planner、Executor、Replanner 和工具步骤，不应把单次工具调用数直接当成 Agent 步数。", "static_agent_step_metrics", true
 	case strings.Contains(q, "超时") && (strings.Contains(q, "模型") || strings.Contains(q, "降级") || strings.Contains(q, "重试")):
 		return "平台对模型服务超时采用统一超时预算、有限次数重试、指数退避和错误分类；重试仅针对可恢复的 5xx/网络错误，超时会停止继续重试并返回稳定的超时错误。模型配置按 profile 共享准入和熔断状态，避免重试放大或绕过容量保护。", "static_platform_model_resilience", true
 	case strings.Contains(q, "质量报告") && (strings.Contains(q, "模型原文") || strings.Contains(q, "脱敏") || strings.Contains(q, "导出")):
@@ -151,6 +229,14 @@ func (a *Agent) Invoke(ctx context.Context, req *domain.ChatAgentRequest) (*doma
 		a.finishTrace(ctx, traceID, finishStatus, finishErr, time.Since(startedAt).Milliseconds())
 	}()
 
+	if isTimeConversionQuery(req.Query) {
+		toolResult, err := a.timeConversionEvidence(ctx, req)
+		if err != nil {
+			return nil, apperr.Wrap(err, apperr.ErrAgentFailed)
+		}
+		answer := formatConvertedTimeAnswer(toolResult.Output)
+		return &domain.ChatAgentResponse{SessionID: req.SessionID, Answer: answer, ToolCalls: []domain.ToolCallSummary{{Tool: "mcp_time_convert_time", Status: toolResult.Status, LatencyMS: toolResult.LatencyMS}}, TraceID: traceID}, nil
+	}
 	if isCurrentTimeQuery(req.Query) {
 		toolResult, err := a.currentTimeEvidence(ctx, req)
 		if err != nil {
@@ -259,6 +345,21 @@ func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domai
 
 		r.send("connected", fmt.Sprintf(`{"status":"connected","session_id":"%s"}`, req.SessionID))
 
+		if isTimeConversionQuery(req.Query) {
+			toolResult, toolErr := a.timeConversionEvidence(ctx, req)
+			if toolErr != nil {
+				streamStatus = "failed"
+				streamErr = toolErr.Error()
+				r.send("error", "时间转换服务暂时不可用，请稍后重试。")
+				r.send("done", fmt.Sprintf(`{"trace_id":"%s"}`, traceID))
+				return
+			}
+			toolPayload, _ := json.Marshal(map[string]any{"tool": "mcp_time_convert_time", "status": toolResult.Status, "latency_ms": toolResult.LatencyMS, "output": toolResult.Output})
+			r.send("tool", string(toolPayload))
+			r.send("message", formatConvertedTimeAnswer(toolResult.Output))
+			r.send("done", fmt.Sprintf(`{"trace_id":"%s"}`, traceID))
+			return
+		}
 		if isCurrentTimeQuery(req.Query) {
 			toolResult, toolErr := a.currentTimeEvidence(ctx, req)
 			if toolErr != nil {

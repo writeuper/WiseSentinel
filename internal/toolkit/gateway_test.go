@@ -90,6 +90,21 @@ func TestGatewayInvokeGetCurrentTime(t *testing.T) {
 	}
 }
 
+func TestGatewayInvokeMCPTimeConversionFallback(t *testing.T) {
+	ctx := ctxWithRoles(context.Background(), "viewer")
+	gw := toolkit.NewGateway(ctx)
+	resp, err := gw.Invoke(ctx, &domain.ToolInvokeRequest{
+		ToolName: "mcp_time_convert_time",
+		Input:    json.RawMessage(`{"source_timezone":"Asia/Shanghai","time":"2026-08-13 09:00:00","target_timezone":"UTC"}`),
+	})
+	if err != nil {
+		t.Fatalf("fallback conversion failed: %v", err)
+	}
+	if !strings.Contains(resp.Output, `"target_timezone":"UTC"`) || !strings.Contains(resp.Output, `"time":"2026-08-13 01:00:00"`) {
+		t.Fatalf("unexpected conversion output: %s", resp.Output)
+	}
+}
+
 func TestGatewayInvokeL0ForViewer(t *testing.T) {
 	ctx := ctxWithRoles(context.Background(), "viewer")
 	gw := toolkit.NewGateway(ctx)

@@ -45,6 +45,7 @@ func TestPlatformCapabilityAnswersAvoidOperationalRAGForResilienceAndReports(t *
 		query, step string
 		keywords    []string
 	}{
+		{"如何查看 Agent 的平均执行步数", "static_agent_step_metrics", []string{"平均 Trace 步数", "最小值", "最大值"}},
 		{"模型服务超时如何降级和重试", "static_platform_model_resilience", []string{"超时", "有限次数重试", "熔断"}},
 		{"如何导出不包含模型原文的质量报告", "static_quality_report_projection", []string{"聚合指标", "脱敏", "Token"}},
 	}
@@ -61,6 +62,21 @@ func TestPlatformCapabilityAnswersAvoidOperationalRAGForResilienceAndReports(t *
 	}
 	if _, _, ok := platformCapabilityAnswer("如何排查 Redis timeout"); ok {
 		t.Fatal("component operational query must remain on RAG/ops path")
+	}
+}
+
+func TestExtractConversionTimeAndTarget(t *testing.T) {
+	if got := extractConversionTime("请把 2026-08-13 09:00:00 从北京时间转换为 UTC"); got != "2026-08-13 09:00:00" {
+		t.Fatalf("explicit time = %q", got)
+	}
+	if got := extractConversionTime("把当前时间转换为 UTC"); got != "" {
+		t.Fatalf("unexpected implicit time = %q", got)
+	}
+	if got := timeConversionTarget("转换为美国东部时间"); got != "America/New_York" {
+		t.Fatalf("target = %q", got)
+	}
+	if got := timeConversionTarget("转换为 UTC"); got != "UTC" {
+		t.Fatalf("target = %q", got)
 	}
 }
 
