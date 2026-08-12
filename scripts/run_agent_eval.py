@@ -417,6 +417,18 @@ def run_case(client: EvalClient, row: Dict[str, str], args: argparse.Namespace) 
     return result
 
 
+def load_resume_results(path: Path) -> Dict[str, Dict[str, str]]:
+    """Load prior case results for safe, idempotent batch resumption."""
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as file:
+            rows = csv.DictReader(file)
+            return {str(row.get("case_id") or ""): dict(row) for row in rows if row.get("case_id")}
+    except (OSError, csv.Error):
+        return {}
+
+
 def read_cases(path: Path) -> Tuple[List[str], List[Dict[str, str]]]:
     with path.open("r", encoding="utf-8-sig", newline="") as file:
         reader = csv.DictReader(file)
@@ -509,6 +521,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--summary-json", default="", help="Write aggregate metrics only; contains no model/tool output.")
     parser.add_argument("--allow-failures", action="store_true", help="Report failed cases without returning a non-zero status (diagnostics only).")
+    parser.add_argument("--resume", action="store_true", help="Resume from --output and skip cases that already passed; retry prior failures.")
     return parser.parse_args()
 
 
@@ -544,14 +557,27 @@ def main() -> int:
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    prior_results = load_resume_results(output_path) if args.resume else {}
     results = []
+    skipped = 0
     for index, case in enumerate(cases, start=1):
+        prior = prior_results.get(case.get("case_id", ""))
+        if prior and prior.get("passed") == "Y":
+            results.append(prior)
+            skipped += 1
+            print(f"[{index}/{len(cases)}] {case.get('case_id')} resumed=Y passed={prior.get('passed')} bad_case={prior.get('bad_case')}")
+            continue
         result = run_case(client, case, args)
         print(f"[{index}/{len(cases)}] {case.get('case_id')} route={result['actual_route']} passed={result['passed']} bad_case={result['bad_case']}")
         results.append(result)
+        # Persist after every case so an upstream timeout or process restart
+        # loses at most one case and can be resumed deterministically.
+        write_results(output_path, fieldnames, results)
     write_results(output_path, fieldnames, results)
     metrics = build_metrics(results)
     print_metrics(metrics)
+    if args.resume:
+        print(f"resumed cases: {skipped}")
     if args.summary_json:
         summary_path = Path(args.summary_json)
         summary_path.parent.mkdir(parents=True, exist_ok=True)
