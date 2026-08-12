@@ -11,6 +11,10 @@ SPEC.loader.exec_module(MODULE)
 
 
 class EvalSessionCleanupTests(unittest.TestCase):
+    def test_evidence_source_requires_all_pipe_delimited_sources(self) -> None:
+        output = '{"source": "prometheus"} {"source": "logs"}'
+        self.assertTrue(MODULE.check_evidence_source("prometheus|logs", output))
+        self.assertFalse(MODULE.check_evidence_source("prometheus|deployment_api", output))
     def test_tenant_binding_rejects_header_only_cross_tenant_claim(self) -> None:
         client = object.__new__(MODULE.EvalClient)
         client.current_user = lambda: {"tenant_id": "default"}

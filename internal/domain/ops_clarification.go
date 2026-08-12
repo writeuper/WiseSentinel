@@ -53,7 +53,7 @@ func hasDiagnosticSignal(text string) bool {
 	for _, signal := range []string{
 		"告警", "alert", "日志", "log", "指标", "metric", "错误率", "延迟", "latency",
 		"500", "502", "503", "504", "timeout", "超时", "redis", "mysql", "发布", "部署", "回滚", "限流", "锁",
-		"失败", "down", "deadlock", "firing",
+		"失败", "down", "deadlock", "firing", "使用率", "请求量", "成功率", "命中率", "积压", "重试率", "握手", "连接池", "同步延迟",
 	} {
 		if strings.Contains(text, signal) {
 			return true

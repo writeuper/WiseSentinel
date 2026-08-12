@@ -333,11 +333,11 @@ def check_forbidden_tools(forbidden_tools: str, actual_tools: str) -> Tuple[bool
 
 
 def check_evidence_source(expected_source: str, actual_output: str) -> bool:
-    expected = (expected_source or "").strip().lower()
+    expected = split_pipe(expected_source)
     if not expected:
         return True
     output = (actual_output or "").lower()
-    return f'"source": "{expected}"' in output or f"source: {expected}" in output or expected in output
+    return all(f'"source": "{item.lower()}"' in output or f"source: {item.lower()}" in output or item.lower() in output for item in expected)
 
 
 def check_keywords(expected_keywords: str, actual_output: str, threshold: float) -> Tuple[bool, int, int]:

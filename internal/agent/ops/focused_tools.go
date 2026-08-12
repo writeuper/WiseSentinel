@@ -108,6 +108,21 @@ func focusedToolRequests(query string) ([]focusedToolRequest, bool) {
 	alerts := func() focusedToolRequest {
 		return focusedToolRequest{name: "query_prometheus_alerts", input: mustJSON(map[string]any{})}
 	}
+	// Explicit user constraints take precedence over broad symptom routing.
+	// A phrase such as "发布后错误" must not re-enable deployment lookup when
+	// the same request explicitly forbids it.
+	if containsAny(query, "不要查询发布", "不查询发布", "禁止查询发布", "不要查发布", "不查发布") {
+		return []focusedToolRequest{logs(), metrics()}, true
+	}
+	if containsAny(query, "Prometheus 不可用", "prometheus 不可用", "Prometheus不可用", "指标不可用", "不要查询指标", "不查询指标") {
+		return []focusedToolRequest{logs()}, true
+	}
+	if containsAny(query, "不要执行写操作", "不执行写操作", "只做证据收集", "权限不足时不能执行回滚", "不能执行回滚") {
+		return []focusedToolRequest{logs(), metrics()}, true
+	}
+	if containsAny(query, "结合告警、日志和指标", "告警、日志和指标", "告警日志指标") {
+		return []focusedToolRequest{alerts(), logs(), metrics()}, true
+	}
 
 	needsCorrelation := strings.Contains(query, "Redis") || strings.Contains(query, "redis") || strings.Contains(lower, "timeout") || strings.Contains(query, "超时") || strings.Contains(query, "间歇") || strings.Contains(query, "偶发") || strings.Contains(lower, "intermittent") || strings.Contains(lower, "flaky")
 	switch {
@@ -128,13 +143,22 @@ func focusedToolRequests(query string) ([]focusedToolRequest, bool) {
 		return []focusedToolRequest{logs(), metrics()}, true
 	case strings.Contains(query, "500") || strings.Contains(query, "503") || strings.Contains(query, "锁") || strings.Contains(lower, "deadlock") || strings.Contains(query, "限流"):
 		return []focusedToolRequest{logs(), metrics()}, true
-	case strings.Contains(query, "指标") || strings.Contains(query, "错误率") || strings.Contains(query, "延迟") || strings.Contains(lower, "metric") || strings.Contains(lower, "latency"):
+	case strings.Contains(query, "指标") || strings.Contains(query, "错误率") || strings.Contains(query, "延迟") || strings.Contains(query, "使用率") || strings.Contains(query, "请求量") || strings.Contains(query, "成功率") || strings.Contains(query, "命中率") || strings.Contains(query, "积压") || strings.Contains(query, "重试率") || strings.Contains(query, "连接池") || strings.Contains(query, "同步延迟") || strings.Contains(query, "握手") || strings.Contains(lower, "metric") || strings.Contains(lower, "latency") || strings.Contains(lower, "utilization") || strings.Contains(lower, "request rate") || strings.Contains(lower, "success rate") || strings.Contains(lower, "retry rate") || strings.Contains(lower, "queue depth") || strings.Contains(lower, "handshake"):
 		return []focusedToolRequest{metrics()}, true
 	case strings.Contains(query, "日志") || strings.Contains(lower, "deadlock") || strings.Contains(query, "503") || strings.Contains(query, "500") || strings.Contains(query, "Redis") || strings.Contains(query, "redis") || strings.Contains(query, "锁") || strings.Contains(query, "限流"):
 		return []focusedToolRequest{logs()}, true
 	default:
 		return nil, false
 	}
+}
+
+func containsAny(text string, terms ...string) bool {
+	for _, term := range terms {
+		if strings.Contains(text, term) {
+			return true
+		}
+	}
+	return false
 }
 
 func focusedConclusion(query, output string) string {
