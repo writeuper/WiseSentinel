@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"strings"
 	"unicode/utf8"
 
 	"wisesentinel-platform/internal/pkg/apperr"
@@ -17,7 +18,7 @@ const (
 )
 
 func validateBoundedText(value string, maxRunes int) error {
-	if maxRunes <= 0 || utf8.RuneCountInString(value) > maxRunes {
+	if maxRunes <= 0 || strings.TrimSpace(value) == "" || utf8.RuneCountInString(value) > maxRunes {
 		return apperr.ErrBadRequest
 	}
 	return nil

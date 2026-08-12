@@ -17,6 +17,14 @@ func TestValidateBoundedTextHonorsRuneRatherThanByteBoundary(t *testing.T) {
 	}
 }
 
+func TestValidateBoundedTextRejectsWhitespaceOnlyInput(t *testing.T) {
+	for _, value := range []string{"", "   ", "\t\n", "　"} {
+		if err := validateBoundedText(value, 10); err == nil {
+			t.Fatalf("whitespace-only value %q must be rejected", value)
+		}
+	}
+}
+
 func TestHandlersRejectOversizedHighCostFieldsBeforeDependencies(t *testing.T) {
 	controller := NewV1(nil)
 	ctx := context.Background()
