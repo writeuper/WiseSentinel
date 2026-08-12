@@ -11,6 +11,15 @@ SPEC.loader.exec_module(MODULE)
 
 
 class EvalSessionCleanupTests(unittest.TestCase):
+    def test_classifies_business_model_timeout_as_timeout(self) -> None:
+        self.assertEqual(
+            MODULE.classify_failure(False, False, False, False, 'HTTP 504 http://local:8090/chat: {"code":50401,"message":"模型服务响应超时"}'),
+            "timeout",
+        )
+
+    def test_classifies_rate_limit_before_timeout(self) -> None:
+        self.assertEqual(MODULE.classify_failure(False, False, False, False, "HTTP 429 请求过于频繁"), "rate_limited")
+
     def test_evidence_source_requires_all_pipe_delimited_sources(self) -> None:
         output = '{"source": "prometheus"} {"source": "logs"}'
         self.assertTrue(MODULE.check_evidence_source("prometheus|logs", output))

@@ -362,7 +362,9 @@ def classify_failure(route_ok: bool, tools_ok: bool, knowledge_ok: bool, keyword
         lower_error = error.lower()
         if "429" in lower_error or "rate limit" in lower_error or "请求过于频繁" in error:
             return "rate_limited"
-        if "timed out" in lower_error or "timeout" in lower_error:
+        if ("timed out" in lower_error or "timeout" in lower_error or
+                "超时" in error or "50401" in lower_error or
+                "model service response timeout" in lower_error):
             return "timeout"
         return "http_error"
     if not route_ok:
