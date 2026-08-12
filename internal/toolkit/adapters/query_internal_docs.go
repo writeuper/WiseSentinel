@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"wisesentinel-platform/internal/domain"
@@ -50,7 +51,7 @@ func QueryInternalDocs(ctx context.Context, input json.RawMessage) (string, erro
 	resp, err := svc.Retrieve(ctx, &domain.RetrieveRequest{
 		TenantID: ctxkeys.TenantIDFrom(ctx),
 		Query:    req.Query,
-		TopK:     3,
+		TopK:     internalDocsTopK(req.Query),
 	})
 	if err != nil {
 		return "", fmt.Errorf("retrieve failed: %w", err)
@@ -61,4 +62,14 @@ func QueryInternalDocs(ctx context.Context, input json.RawMessage) (string, erro
 		return "", fmt.Errorf("marshal result: %w", err)
 	}
 	return string(result), nil
+}
+
+func internalDocsTopK(query string) int {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if strings.Contains(q, "runbook") || strings.Contains(q, "排查手册") ||
+		strings.Contains(q, "内部文档") || strings.Contains(q, "知识库") ||
+		(strings.Contains(q, "检查顺序") && (strings.Contains(q, "止血") || strings.Contains(q, "升级"))) {
+		return 8
+	}
+	return 3
 }

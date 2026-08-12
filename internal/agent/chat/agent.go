@@ -29,6 +29,11 @@ import (
 const maxStep = 25
 
 const (
+	defaultChatRAGTopK = 3
+	runbookRAGTopK     = 8
+)
+
+const (
 	ragStepSuccess = "success"
 	ragStepEmpty   = "empty"
 	ragStepSkipped = "skipped"
@@ -156,6 +161,8 @@ func platformCapabilityAnswer(query string) (string, string, bool) {
 		return "平台对模型服务超时采用统一超时预算、有限次数重试、指数退避和错误分类；重试仅针对可恢复的 5xx/网络错误，超时会停止继续重试并返回稳定的超时错误。模型配置按 profile 共享准入和熔断状态，避免重试放大或绕过容量保护。", "static_platform_model_resilience", true
 	case strings.Contains(q, "质量报告") && (strings.Contains(q, "模型原文") || strings.Contains(q, "脱敏") || strings.Contains(q, "导出")):
 		return "质量报告默认只输出聚合指标和脱敏后的分类信息，不包含用户问题原文、模型原文、工具参数、凭证、Token、DSN 或完整 Trace 内容。报告可统计任务完成率、工具成功率、延迟分位数、RAG 检索质量和失败分类；如需审计详情，应通过授权的 Trace/审计接口查看脱敏摘要。", "static_quality_report_projection", true
+	case strings.Contains(q, "评测") && (strings.Contains(q, "case") || strings.Contains(q, "用例")) && (strings.Contains(q, "配置") || strings.Contains(q, "创建") || strings.Contains(q, "新增")):
+		return "新增 Agent 评测 Case 时，建议为每条 Case 配置唯一 case_id、场景和输入，明确 expected_route、expected_tools、forbidden_tools、expected_source、expected_knowledge 与 expected_keywords，并为通过条件设置可审计断言。提交前先在隔离集成租户执行单条回归，再纳入 100+ 冻结评测集；工具断言必须以持久化 Trace Step 为准，不能只匹配模型文本。", "static_eval_case_configuration", true
 	default:
 		return "", "", false
 	}
@@ -638,6 +645,14 @@ func (a *Agent) retrieveDocs(ctx context.Context, req *domain.ChatAgentRequest) 
 	if a.ragService == nil {
 		return "RAG状态：不可用，以下回答不得视为内部知识库结论。", citations, ragStepError, "rag service unavailable"
 	}
+	// Explicit Runbook/document requests must execute query_internal_docs so
+	// the persisted tool step, authorization boundary and tool evidence remain
+	// auditable. Preloading the same chunks here lets the model answer without
+	// invoking the tool, which makes the result look successful while losing
+	// the required evidence chain. The adapter uses the expanded Runbook TopK.
+	if req.Options.EnableTools && chatRAGTopK(req.Query) > defaultChatRAGTopK {
+		return a.retrieveExplicitRunbook(ctx, req)
+	}
 
 	tenantID := req.TenantID
 	if tenantID == "" {
@@ -646,7 +661,7 @@ func (a *Agent) retrieveDocs(ctx context.Context, req *domain.ChatAgentRequest) 
 	decision, err := a.ragService.Route(ctx, &domain.RetrieveRequest{
 		TenantID: tenantID,
 		Query:    req.Query,
-		TopK:     3,
+		TopK:     chatRAGTopK(req.Query),
 	})
 	if err != nil || decision == nil || decision.Response == nil {
 		errText := ""
@@ -675,6 +690,79 @@ func (a *Agent) retrieveDocs(ctx context.Context, req *domain.ChatAgentRequest) 
 	}
 
 	return documents, citations, ragStepSuccess, ""
+}
+
+// retrieveExplicitRunbook executes the internal-docs tool synchronously for
+// explicit Runbook/document requests. This closes a reliability gap where a
+// model could answer from the preloaded RAG context without producing a
+// persisted query_internal_docs tool step, making tool-hit evaluation and
+// audit evidence inconsistent with the user-visible answer.
+func (a *Agent) retrieveExplicitRunbook(ctx context.Context, req *domain.ChatAgentRequest) (string, []domain.Citation, string, string) {
+	if a.toolGateway == nil {
+		return "RAG状态：检索工具不可用，以下回答不得视为内部知识库结论。", nil, ragStepError, "tool gateway unavailable"
+	}
+	tenantID := req.TenantID
+	if tenantID == "" {
+		tenantID = ctxkeys.TenantIDFrom(ctx)
+	}
+	input, err := json.Marshal(map[string]string{"query": req.Query})
+	if err != nil {
+		return "RAG状态：检索请求构造失败。", nil, ragStepError, err.Error()
+	}
+	result, err := a.toolGateway.Invoke(ctx, &domain.ToolInvokeRequest{
+		TenantID: tenantID, UserID: ctxkeys.UserIDFrom(ctx), TraceID: ctxkeys.TraceIDFrom(ctx),
+		ToolName: "query_internal_docs", Input: input, AgentType: domain.AgentTypeChat,
+	})
+	if err != nil || result == nil {
+		errText := "internal docs tool failed"
+		if err != nil {
+			errText = redact.Summary(err.Error(), 500)
+		}
+		return "RAG状态：检索失败，以下回答不得视为内部知识库结论。", nil, ragStepError, errText
+	}
+	var response domain.RetrieveResponse
+	if err := json.Unmarshal([]byte(result.Output), &response); err != nil {
+		return "RAG状态：检索结果格式无效，以下回答不得视为内部知识库结论。", nil, ragStepError, "invalid internal docs response"
+	}
+	if result.Status != "success" || len(response.Documents) == 0 || response.Confidence == domain.ConfidenceLow {
+		return "RAG状态：未找到足够相关的内部知识，以下回答不得视为内部知识库结论。", nil, ragStepEmpty, ""
+	}
+	return renderRetrievedDocuments(response), citationsFromDocuments(response.Documents), ragStepSuccess, ""
+}
+
+func renderRetrievedDocuments(response domain.RetrieveResponse) string {
+	documents := ""
+	if response.Confidence != "" {
+		documents = fmt.Sprintf("RAG路由: internal_docs_tool，置信度=%s。\n---\n", response.Confidence)
+	}
+	for _, doc := range response.Documents {
+		documents += fmt.Sprintf("来源[%s]: %s\n---\n", doc.Source, doc.Content)
+	}
+	return documents
+}
+
+func citationsFromDocuments(documents []domain.RetrievedDocument) []domain.Citation {
+	citations := make([]domain.Citation, 0, len(documents))
+	for _, doc := range documents {
+		citations = append(citations, domain.Citation{DocID: doc.DocID, ChunkID: doc.ChunkID, Source: doc.Source, Snippet: truncate(doc.Content, 200)})
+	}
+	return citations
+}
+
+// chatRAGTopK keeps ordinary questions inexpensive while preserving enough
+// section-level context for explicit Runbook requests. Markdown Runbooks are
+// intentionally split by headings; a top-three search can return only the
+// title, scope and escalation sections while omitting the requested action
+// sequence and mitigation. The higher bound is limited to explicit document
+// requests so unrelated Chat traffic does not pay the larger retrieval cost.
+func chatRAGTopK(query string) int {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if strings.Contains(q, "runbook") || strings.Contains(q, "排查手册") ||
+		strings.Contains(q, "内部文档") || strings.Contains(q, "知识库") ||
+		(strings.Contains(q, "检查顺序") && (strings.Contains(q, "止血") || strings.Contains(q, "升级"))) {
+		return runbookRAGTopK
+	}
+	return defaultChatRAGTopK
 }
 
 func (a *Agent) startTrace(ctx context.Context, traceID string, req *domain.ChatAgentRequest, startedAt time.Time) {

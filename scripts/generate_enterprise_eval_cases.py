@@ -74,10 +74,10 @@ def build_cases() -> List[Dict[str, str]]:
     # 20 RAG cases spanning runbook types and citation requirements.
     runbooks = [
         ("Kubernetes CrashLoopBackOff", "CrashLoopBackOff|事件|日志|回滚"),
-        ("Pod OOMKilled", "OOMKilled|内存|限制|扩容"),
-        ("服务 5xx 错误率升高", "5xx|错误率|日志|指标"),
-        ("API P95 延迟升高", "P95|延迟|下游|指标"),
-        ("Redis timeout 和连接池耗尽", "Redis|timeout|连接池|止血"),
+        ("Kubernetes OOMKilled", "OOMKilled|内存|限制|扩容"),
+        ("HTTP 5xx 错误率升高", "5xx|错误率|日志|指标"),
+        ("P95/P99 延迟升高", "P95|延迟|下游|指标"),
+        ("Redis 超时与连接池耗尽", "Redis|timeout|连接池|止血"),
         ("MySQL deadlock", "MySQL|deadlock|事务|回滚"),
         ("Kafka consumer lag", "Kafka|lag|消费|分区"),
         ("网关限流", "限流|租户|配额|止血"),

@@ -48,6 +48,7 @@ func TestPlatformCapabilityAnswersAvoidOperationalRAGForResilienceAndReports(t *
 		{"如何查看 Agent 的平均执行步数", "static_agent_step_metrics", []string{"平均 Trace 步数", "最小值", "最大值"}},
 		{"模型服务超时如何降级和重试", "static_platform_model_resilience", []string{"超时", "有限次数重试", "熔断"}},
 		{"如何导出不包含模型原文的质量报告", "static_quality_report_projection", []string{"聚合指标", "脱敏", "Token"}},
+		{"如何配置一个新的 Agent 评测 Case", "static_eval_case_configuration", []string{"case_id", "expected_route", "持久化 Trace Step"}},
 	}
 	for _, tc := range tests {
 		answer, step, ok := platformCapabilityAnswer(tc.query)
@@ -77,6 +78,15 @@ func TestExtractConversionTimeAndTarget(t *testing.T) {
 	}
 	if got := timeConversionTarget("转换为 UTC"); got != "UTC" {
 		t.Fatalf("target = %q", got)
+	}
+}
+
+func TestChatRAGTopKExpandsExplicitRunbookQueries(t *testing.T) {
+	if got := chatRAGTopK("根据内部 Kubernetes 排查手册说明检查顺序、止血和升级条件"); got != runbookRAGTopK {
+		t.Fatalf("runbook topK = %d, want %d", got, runbookRAGTopK)
+	}
+	if got := chatRAGTopK("什么是 Agent 平台"); got != defaultChatRAGTopK {
+		t.Fatalf("ordinary topK = %d, want %d", got, defaultChatRAGTopK)
 	}
 }
 
