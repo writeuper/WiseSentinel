@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -57,5 +58,20 @@ func TestRequestTextLimitsRejectOversizedPromptAndComment(t *testing.T) {
 				t.Fatalf("oversized %s must be rejected", name)
 			}
 		})
+	}
+}
+
+func TestVectorGCRedriveReasonUsesSupportedValidationRules(t *testing.T) {
+	// The request tag is parsed by GoFrame before the handler runs. Keep this
+	// contract test close to the API type so an unsupported compound rule cannot
+	// silently disable every redrive request again.
+	field, ok := reflect.TypeOf(v1.RequestVectorGCRedriveReq{}).FieldByName("Reason")
+	if !ok || field.Tag.Get("v") != "required|length:1,500" {
+		t.Fatalf("redrive reason validation tag = %q, want required|length:1,500", field.Tag.Get("v"))
+	}
+	for _, value := range []string{"Milvus recovered", strings.Repeat("x", 500)} {
+		if err := validateBoundedText(value, 500); err != nil {
+			t.Fatalf("valid redrive reason rejected: %v", err)
+		}
 	}
 }

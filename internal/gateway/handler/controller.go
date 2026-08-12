@@ -86,11 +86,28 @@ func lookupUserRoles(ctx context.Context, tenantID, userID string) []string {
 	type row struct {
 		Role string
 	}
+	// The development login accepts either the stable user_id or the seeded
+	// email address. Resolve email to user_id before reading roles; otherwise
+	// role-specific demo accounts would silently fall back to operator.
+	userIDs := []string{userID}
+	var users []struct {
+		UserID string `json:"user_id"`
+	}
+	db := g.DB()
+	if err := db.Model("ws_user").Ctx(ctx).
+		Where("tenant_id", tenantID).Where("email", userID).
+		Fields("user_id").Scan(&users); err == nil {
+		for _, user := range users {
+			if user.UserID != "" && user.UserID != userID {
+				userIDs = append(userIDs, user.UserID)
+			}
+		}
+	}
 	var rows []row
-	err := g.DB().Model("ws_user_role").
+	err := db.Model("ws_user_role").
 		Ctx(ctx).
 		Where("tenant_id", tenantID).
-		Where("user_id", userID).
+		WhereIn("user_id", userIDs).
 		Fields("role").
 		Scan(&rows)
 	if err != nil || len(rows) == 0 {

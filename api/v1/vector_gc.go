@@ -30,7 +30,7 @@ type RequestVectorGCRedriveReq struct {
 	g.Meta    `path:"/admin/vector-gc/documents/{doc_id}/tasks/{target_key}/redrive" method:"post" tags:"Admin" summary:"申请重驱死信向量 GC"`
 	DocID     string `json:"doc_id" in:"path" v:"required"`
 	TargetKey string `json:"target_key" in:"path" v:"required"`
-	Reason    string `json:"reason" v:"required-length:1,500"`
+	Reason    string `json:"reason" v:"required|length:1,500"`
 }
 
 type RequestVectorGCRedriveRes struct {
