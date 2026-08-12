@@ -27,23 +27,30 @@ func (i *EinoMilvusIndexer) Store(ctx context.Context, docs []*schema.Document, 
 
 	inputs := make([]ragindexer.ChunkInput, len(docs))
 	ids := make([]string, len(docs))
+	task := IndexTaskFrom(ctx)
+	if task == nil || task.Generation == 0 || task.TaskID == "" {
+		return nil, fmt.Errorf("index task generation and task ID are required")
+	}
 	for idx, doc := range docs {
-		chunkID := doc.ID
-		if chunkID == "" {
-			chunkID = stringValue(doc.MetaData, "id")
-		}
+		chunkIndex := intValue(doc.MetaData, "chunk_index")
+		chunkID := ragindexer.DeterministicChunkID(task.TenantID, task.DocID, task.Generation, chunkIndex, doc.Content)
 		ids[idx] = chunkID
 
 		inputs[idx] = ragindexer.ChunkInput{
 			ChunkID:     chunkID,
 			Content:     doc.Content,
-			ChunkIndex:  intValue(doc.MetaData, "chunk_index"),
+			ChunkIndex:  chunkIndex,
 			Title:       stringValue(doc.MetaData, "title"),
 			TenantID:    stringValue(doc.MetaData, "tenant_id"),
 			DocID:       stringValue(doc.MetaData, "doc_id"),
 			Source:      stringValue(doc.MetaData, "_source"),
 			Visibility:  stringValue(doc.MetaData, "visibility"),
 			SecretLevel: intValue(doc.MetaData, "secret_level"),
+			Layer:       stringValue(doc.MetaData, "_layer"),
+			Version:     stringValue(doc.MetaData, "version"),
+			Service:     stringValue(doc.MetaData, "service"),
+			Generation:  task.Generation,
+			IndexTaskID: task.TaskID,
 		}
 	}
 

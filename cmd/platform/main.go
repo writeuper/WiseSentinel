@@ -18,18 +18,32 @@ func main() {
 	if err != nil {
 		g.Log().Fatal(ctx, "bootstrap failed:", err)
 	}
+	defer func() {
+		if err := app.Close(); err != nil {
+			g.Log().Warning(ctx, "close MCP client failed:", err)
+		}
+	}()
 	if app.Milvus != nil {
 		defer app.Milvus.Close()
 	}
 
-	// Start the Ops Worker (M4 async dispatcher).
+	// Start async workers.
 	if app.OpsWorker != nil {
 		app.OpsWorker.Start(ctx)
 		g.Log().Info(ctx, "OpsWorker started")
+	}
+	if app.IndexWorker != nil {
+		app.IndexWorker.Start(ctx)
+		g.Log().Info(ctx, "IndexWorker started")
+	}
+	if app.VectorGCWorker != nil {
+		app.VectorGCWorker.Start(ctx)
+		g.Log().Info(ctx, "VectorGCWorker started")
 	}
 
 	s := g.Server()
 	s.SetSessionStorage(gsession.NewStorageMemory())
 	gateway.Register(s, app)
 	s.Run()
+	g.Log().Info(ctx, "server stopped")
 }

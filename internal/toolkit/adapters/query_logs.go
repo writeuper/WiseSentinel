@@ -43,6 +43,9 @@ func NewQueryLogs() func(ctx context.Context, input json.RawMessage) (string, er
 		}
 
 		mcpURL := configx.String(ctx, "mcp.log.url", "MCP_LOG_URL")
+		if strings.EqualFold(mcpURL, "local_mock") {
+			return NewSearchLogs()(ctx, input)
+		}
 		if mcpURL == "" {
 			// Return a meaningful message when MCP is not configured
 			output := QueryLogsOutput{
@@ -78,15 +81,14 @@ func NewQueryLogs() func(ctx context.Context, input json.RawMessage) (string, er
 			return "", fmt.Errorf("MCP request failed: %w", err)
 		}
 		defer resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			return "", upstreamHTTPError("MCP", resp)
+		}
 
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return "", fmt.Errorf("read MCP response: %w", err)
 		}
-		if resp.StatusCode >= 300 {
-			return "", fmt.Errorf("MCP HTTP %d: %s", resp.StatusCode, string(respBody))
-		}
-
 		// Try to parse as structured output; fallback to raw text
 		var logs QueryLogsOutput
 		if err := json.Unmarshal(respBody, &logs); err != nil {

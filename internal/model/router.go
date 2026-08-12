@@ -3,7 +3,10 @@ package model
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,30 +85,38 @@ type ToolFunction struct {
 
 // Router implements domain.ModelRouter.
 type Router struct {
-	mu       sync.RWMutex
-	profiles map[domain.ModelProfile]*ProfileConfig
+	mu                  sync.RWMutex
+	profiles            map[domain.ModelProfile]*ProfileConfig
+	runtimes            map[string]*modelRuntimeState
+	globalMaxConcurrent int
 }
 
 // ProfileConfig stores resolved model profile configuration.
 type ProfileConfig struct {
-	Provider   string
-	Model      string
-	APIKey     string
-	BaseURL    string
-	Timeout    time.Duration
-	Dimensions int
+	Provider      string
+	Model         string
+	APIKey        string
+	BaseURL       string
+	Timeout       time.Duration
+	MaxConcurrent int
+	runtime       *modelRuntimeState
+	Dimensions    int
 }
 
 // NewRouter creates a model router from config.
 func NewRouter(ctx context.Context) *Router {
 	r := &Router{
-		profiles: make(map[domain.ModelProfile]*ProfileConfig),
+		profiles:            make(map[domain.ModelProfile]*ProfileConfig),
+		runtimes:            make(map[string]*modelRuntimeState),
+		globalMaxConcurrent: g.Cfg().MustGet(ctx, "models.admission.max_concurrent", 0).Int(),
 	}
 	r.loadProfiles(ctx)
 	return r
 }
 
 func (r *Router) loadProfiles(ctx context.Context) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	profiles := map[domain.ModelProfile]string{
 		domain.ModelProfileChatFast:         "models.profiles.chat_fast",
 		domain.ModelProfileOpsPlan:          "models.profiles.ops_plan",
@@ -114,18 +125,44 @@ func (r *Router) loadProfiles(ctx context.Context) {
 	}
 	for profile, path := range profiles {
 		cfg := &ProfileConfig{
-			Provider:   g.Cfg().MustGet(ctx, path+".provider").String(),
-			Model:      configx.String(ctx, path+".model", modelEnvFor(profile)),
-			APIKey:     configx.String(ctx, path+".api_key", apiKeyEnvFor(profile)),
-			BaseURL:    configx.String(ctx, path+".base_url", baseURLEnvFor(profile)),
-			Timeout:    time.Duration(g.Cfg().MustGet(ctx, path+".timeout_ms", 120000).Int()) * time.Millisecond,
-			Dimensions: g.Cfg().MustGet(ctx, path+".dimensions", 2048).Int(),
+			Provider:      g.Cfg().MustGet(ctx, path+".provider").String(),
+			Model:         configx.String(ctx, path+".model", modelEnvFor(profile)),
+			APIKey:        configx.String(ctx, path+".api_key", apiKeyEnvFor(profile)),
+			BaseURL:       configx.String(ctx, path+".base_url", baseURLEnvFor(profile)),
+			Timeout:       time.Duration(g.Cfg().MustGet(ctx, path+".timeout_ms", 120000).Int()) * time.Millisecond,
+			MaxConcurrent: g.Cfg().MustGet(ctx, path+".max_concurrent", 0).Int(),
+			Dimensions:    g.Cfg().MustGet(ctx, path+".dimensions", 2048).Int(),
 		}
 		if cfg.Timeout <= 0 {
 			cfg.Timeout = 120 * time.Second
 		}
+		cfg.runtime = r.runtimeFor(cfg)
 		r.profiles[profile] = cfg
 	}
+}
+
+// runtimeFor scopes admission and circuit-breaker state to a model deployment,
+// not an Agent profile. Chat, Ops plan and Ops execute often share one vendor
+// deployment; per-profile limits would let their aggregate traffic exceed the
+// provider budget. Credentials are fingerprinted and never retained in the key.
+func (r *Router) runtimeFor(cfg *ProfileConfig) *modelRuntimeState {
+	credentialDigest := sha256.Sum256([]byte(cfg.APIKey))
+	key := strings.Join([]string{
+		strings.ToLower(strings.TrimSpace(cfg.Provider)),
+		strings.TrimSpace(cfg.Model),
+		strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/"),
+		hex.EncodeToString(credentialDigest[:]),
+	}, "\x00")
+	if runtime := r.runtimes[key]; runtime != nil {
+		return runtime
+	}
+	limit := cfg.MaxConcurrent
+	if r.globalMaxConcurrent > 0 {
+		limit = r.globalMaxConcurrent
+	}
+	runtime := newModelRuntimeState(limit)
+	r.runtimes[key] = runtime
+	return runtime
 }
 
 func apiKeyEnvFor(profile domain.ModelProfile) string {
@@ -178,7 +215,7 @@ func (r *Router) ChatModel(ctx context.Context, profile domain.ModelProfile) (an
 	if cfg.BaseURL == "" {
 		return nil, fmt.Errorf("model profile %q: base URL is required", profile)
 	}
-	return NewOpenAIEinoModel(cfg.Provider, cfg.Model, cfg.APIKey, cfg.BaseURL, cfg.Timeout), nil
+	return newOpenAIEinoModel(cfg.Provider, cfg.Model, cfg.APIKey, cfg.BaseURL, cfg.Timeout, cfg.runtime), nil
 }
 
 // Ensure Router implements domain.ModelRouter.

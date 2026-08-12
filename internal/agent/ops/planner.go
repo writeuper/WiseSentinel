@@ -26,6 +26,6 @@ func NewPlanner(ctx context.Context, modelRouter domain.ModelRouter) (adk.Agent,
 		return nil, fmt.Errorf("ops_plan model does not implement model.ToolCallingChatModel")
 	}
 	return planexecute.NewPlanner(ctx, &planexecute.PlannerConfig{
-		ToolCallingChatModel: planModel,
+		ToolCallingChatModel: newForceToolModel(planModel),
 	})
 }

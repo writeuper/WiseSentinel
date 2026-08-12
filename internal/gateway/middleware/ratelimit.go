@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -9,7 +10,27 @@ import (
 
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/net/ghttp"
+	"github.com/google/uuid"
 )
+
+const slidingWindowScript = `
+	local key = KEYS[1]
+	local window = tonumber(ARGV[1])
+	local maxCount = tonumber(ARGV[2])
+	local now = tonumber(ARGV[3])
+	local cutoff = now - (window * 1000)
+
+	redis.call("ZREMRANGEBYSCORE", key, 0, cutoff)
+	local count = redis.call("ZCARD", key)
+
+	if count >= maxCount then
+		return 1
+	end
+
+	redis.call("ZADD", key, now, ARGV[4])
+	redis.call("EXPIRE", key, window * 2)
+	return 0
+`
 
 // RateLimit applies per-user request throttling using Redis sliding-window algorithm.
 //
@@ -25,12 +46,12 @@ func RateLimit(r *ghttp.Request) {
 	}
 
 	ctx := r.Context()
-	userID := ctxkeys.UserIDFrom(ctx)
+	userID := strings.TrimSpace(ctxkeys.UserIDFrom(ctx))
 	if userID == "" {
 		userID = "anonymous"
 	}
 
-	limitKey := rateLimitKey(r.URL.Path)
+	limitKey := rateLimitKey(r.Method, r.URL.Path)
 	if limitKey == "" {
 		r.Middleware.Next()
 		return
@@ -44,29 +65,17 @@ func RateLimit(r *ghttp.Request) {
 	// ARGV[1] = window size (seconds)
 	// ARGV[2] = max count
 	// ARGV[3] = current time (ms)
-	const slidingWindowScript = `
-		local key = KEYS[1]
-		local window = tonumber(ARGV[1])
-		local maxCount = tonumber(ARGV[2])
-		local now = tonumber(ARGV[3])
-		local cutoff = now - (window * 1000)
-
-		redis.call("ZREMRANGEBYSCORE", key, 0, cutoff)
-		local count = redis.call("ZCARD", key)
-
-		if count >= maxCount then
-			return 1
-		end
-
-		redis.call("ZADD", key, now, tostring(now))
-		redis.call("EXPIRE", key, window * 2)
-		return 0
-	`
-
+	// ARGV[4] = unique request member
 	nowMs := time.Now().UnixMilli()
-	result, err := g.Redis().Do(ctx, "EVAL", slidingWindowScript, 1, redisKey, 60, maxPerMinute, nowMs)
+	result, err := g.Redis().Do(ctx, "EVAL", slidingWindowScript, 1, redisKey, 60, maxPerMinute, nowMs, rateLimitMember(nowMs))
 	if err != nil {
-		// If Redis is down, allow the request through.
+		// Agent, Ops, and signed Webhook paths can trigger expensive downstream
+		// execution. Failing open here converts a Redis outage into unbounded
+		// model/tool load, so these configured paths fail closed.
+		if rateLimitFailsClosed(limitKey) {
+			writeError(r, apperr.ErrRateLimitUnavailable)
+			return
+		}
 		r.Middleware.Next()
 		return
 	}
@@ -77,12 +86,27 @@ func RateLimit(r *ghttp.Request) {
 	r.Middleware.Next()
 }
 
-func rateLimitKey(path string) string {
+func rateLimitFailsClosed(limitKey string) bool {
+	switch limitKey {
+	case "rate_limit.chat_per_minute", "rate_limit.ops_per_minute", "rate_limit.webhook_per_minute":
+		return true
+	default:
+		return false
+	}
+}
+
+func rateLimitMember(nowMs int64) string {
+	return strconv.FormatInt(nowMs, 10) + ":" + uuid.NewString()
+}
+
+func rateLimitKey(method, path string) string {
 	switch {
 	case strings.HasPrefix(path, "/api/v1/chat"):
 		return "rate_limit.chat_per_minute"
-	case strings.HasPrefix(path, "/api/v1/ops"):
+	case method == "POST" && path == "/api/v1/ops/analyze":
 		return "rate_limit.ops_per_minute"
+	case method == "POST" && path == "/internal/webhooks/alertmanager":
+		return "rate_limit.webhook_per_minute"
 	default:
 		return ""
 	}

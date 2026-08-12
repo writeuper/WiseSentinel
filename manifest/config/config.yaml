@@ -1,5 +1,5 @@
 server:
-  address: ":8090"
+  address: "0.0.0.0:8090"
   name: "wisesentinel-platform"
   openapiPath: "/api.json"
   swaggerPath: "/swagger"
@@ -28,22 +28,28 @@ auth:
 milvus:
   address: "127.0.0.1:19530"
   db: "agent"
-  collection: "biz"
+  collection: "biz_test"
   username: ""
   password: ""
 
 storage:
   type: "local"
   local:
-    base_dir: "/data/wisesentinel/docs"
+    base_dir: "./data/wisesentinel/docs"
 
 models:
+  admission:
+    # One upstream deployment budget shared by Chat/Ops profiles that resolve
+    # to the same provider, model, base URL and credential scope.
+    max_concurrent: 3
   profiles:
     chat_fast:
       provider: openai_compatible
       model: "deepseek-v3"
       api_key: ""
       base_url: ""
+      timeout_ms: 30000
+      max_concurrent: 3
     ops_plan:
       provider: openai_compatible
       model: "deepseek-v3"
@@ -56,27 +62,50 @@ models:
       base_url: ""
     embedding_default:
       provider: dashscope
-      model: "text-embedding-v4"
+      model: "qwen3.7-text-embedding"
       api_key: ""
       dimensions: 2048
+      max_response_bytes: 4194304
 
 prometheus:
-  base_url: "http://127.0.0.1:9090"
+  base_url: "local_mock"
 
 mcp:
+  time:
+    enabled: true
+    # Optional dependency: preserve a bounded cold-start path when unavailable.
+    init_timeout_ms: 2000
+    command: "/home/ubuntu/.local/bin/uvx"
+    allowed_commands: ["/home/ubuntu/.local/bin/uvx"]
+    allowed_args: ["--with", "mcp==1.23.0", "mcp-server-time"]
+    environment_allowlist: ["PATH", "HOME", "LANG", "LC_ALL", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "UV_CACHE_DIR"]
+    max_response_bytes: 65536
+    args: ["--with", "mcp==1.23.0", "mcp-server-time"]
   log:
-    url: ""
+    url: "local_mock"
 
 session:
   max_window_size: 6
   ttl_days: 7
 
+chat:
+  history_token_budget: 4000
+  history_message_char_limit: 8000
+
 rate_limit:
   chat_per_minute: 30
-  ops_per_minute: 5
+  ops_per_minute: 30
+  webhook_per_minute: 120
 
 tenant:
   default_id: "default"
+
+webhook:
+  alertmanager:
+    secret: ""
+    tenant_id: "default"
+    window_seconds: 300
+    max_body_bytes: 1048576
 
 tenant_overrides:
   default:
@@ -89,18 +118,61 @@ tools:
     enabled: true
     timeout_ms: 10000
     agents: [chat, ops]
+    description: "查询 Prometheus 当前正在触发的告警列表"
+  - name: query_metric_range
+    risk_level: L0
+    enabled: true
+    timeout_ms: 10000
+    agents: [ops]
+    description: "按 PromQL 查询指定时间区间的指标曲线，如错误率、延迟、CPU、内存。入参：query(必填PromQL)、start、end、step"
   - name: query_internal_docs
     risk_level: L0
     enabled: true
     timeout_ms: 15000
     agents: [chat, ops]
+    description: "检索内部 RAG 知识库文档"
   - name: get_current_time
     risk_level: L0
     enabled: true
     timeout_ms: 1000
     agents: [chat, ops]
+    description: "获取当前时间作为排障基准"
+  - name: mcp_time_get_current_time
+    risk_level: L0
+    enabled: true
+    timeout_ms: 10000
+    agents: [chat, ops]
+    description: "通过标准 MCP time server 获取当前时间；默认时区 Asia/Shanghai"
+  - name: mcp_time_convert_time
+    risk_level: L0
+    enabled: true
+    timeout_ms: 10000
+    agents: [chat, ops]
+    description: "通过标准 MCP time server 转换时区；入参 source_timezone、time、target_timezone"
   - name: query_logs
     risk_level: L1
     enabled: true
     timeout_ms: 30000
-    agents: [chat, ops]
+    agents: [ops]
+    description: "通过 MCP 按关键词查询日志"
+  - name: search_logs
+    risk_level: L0
+    enabled: true
+    timeout_ms: 5000
+    agents: [ops]
+    description: "从本地 mock 日志中按关键词检索故障日志。入参：query(必填)、service、level、limit"
+  - name: query_logs_by_trace
+    risk_level: L1
+    enabled: true
+    timeout_ms: 30000
+    agents: [ops]
+    description: "按 TraceID 检索分布式链路日志，定位慢调用和错误节点。入参：trace_id(必填)、service、limit"
+  - name: query_deployments
+    risk_level: L1
+    enabled: true
+    timeout_ms: 10000
+    agents: [ops]
+    description: "查询指定服务近期发布、灰度、回滚记录。入参：service(必填)、env、hours、limit"
+
+deployment:
+  base_url: "local_mock"

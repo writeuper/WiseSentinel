@@ -5,7 +5,7 @@ import "github.com/gogf/gf/v2/frame/g"
 // OpsAnalyzeReq triggers alert analysis.
 type OpsAnalyzeReq struct {
 	g.Meta  `path:"/ops/analyze" method:"post" tags:"Ops" summary:"告警分析"`
-	Query   string            `json:"query"`
+	Query   string             `json:"query"`
 	Options *OpsAnalyzeOptions `json:"options"`
 }
 
@@ -17,11 +17,47 @@ type OpsAnalyzeOptions struct {
 
 // OpsAnalyzeRes returns analysis result or task id.
 type OpsAnalyzeRes struct {
-	TaskID  string   `json:"task_id"`
-	Status  string   `json:"status"`
-	Result  string   `json:"result,omitempty"`
-	Detail  []string `json:"detail,omitempty"`
-	TraceID string   `json:"trace_id"`
+	TaskID     string              `json:"task_id"`
+	Status     string              `json:"status"`
+	Result     string              `json:"result,omitempty"`
+	Detail     []string            `json:"detail,omitempty"`
+	TraceID    string              `json:"trace_id"`
+	Evidence   []OpsEvidence       `json:"evidence,omitempty"`
+	Conclusion *OpsFaultConclusion `json:"conclusion,omitempty"`
+	Timing     *OpsTiming          `json:"timing,omitempty"`
+}
+
+// OpsEvidence is one tool call performed during an Ops run.
+type OpsEvidence struct {
+	ToolName    string `json:"tool_name"`
+	Source      string `json:"source,omitempty"`
+	Status      string `json:"status"`
+	LatencyMS   int64  `json:"latency_ms,omitempty"`
+	Timestamp   string `json:"timestamp,omitempty"`
+	Suppressed  bool   `json:"suppressed"`
+	InputBytes  int    `json:"input_bytes,omitempty"`
+	OutputBytes int    `json:"output_bytes,omitempty"`
+}
+
+// OpsTiming captures queue, execution and end-to-end troubleshooting latency.
+type OpsTiming struct {
+	QueueDurationMS int64  `json:"queue_duration_ms"`
+	RunDurationMS   int64  `json:"run_duration_ms"`
+	E2EDurationMS   int64  `json:"e2e_duration_ms"`
+	CreatedAt       string `json:"created_at,omitempty"`
+	StartedAt       string `json:"started_at,omitempty"`
+	FinishedAt      string `json:"finished_at,omitempty"`
+}
+
+// OpsFaultConclusion is the structured conclusion of an Ops troubleshooting run.
+type OpsFaultConclusion struct {
+	Symptom     string `json:"symptom"`
+	Impact      string `json:"impact"`
+	RootCause   string `json:"root_cause"`
+	Workaround  string `json:"workaround"`
+	Remediation string `json:"remediation"`
+	Confidence  string `json:"confidence"`
+	Source      string `json:"source"`
 }
 
 // GetOpsTaskReq queries an ops task.
@@ -32,24 +68,50 @@ type GetOpsTaskReq struct {
 
 // GetOpsTaskRes returns ops task status.
 type GetOpsTaskRes struct {
-	TaskID string   `json:"task_id"`
-	Status string   `json:"status"`
-	Result string   `json:"result,omitempty"`
-	Detail []string `json:"detail,omitempty"`
+	TaskID     string              `json:"task_id"`
+	Status     string              `json:"status"`
+	Result     string              `json:"result,omitempty"`
+	Detail     []string            `json:"detail,omitempty"`
+	Evidence   []OpsEvidence       `json:"evidence,omitempty"`
+	Conclusion *OpsFaultConclusion `json:"conclusion,omitempty"`
+	Timing     *OpsTiming          `json:"timing,omitempty"`
 }
 
 // AlertWebhookReq receives Alertmanager webhook events.
 type AlertWebhookReq struct {
-	g.Meta `path:"/webhook/alerts" method:"post" tags:"Ops" summary:"告警 Webhook 接入"`
-	Status string       `json:"status"`
-	Alerts []AlertEvent `json:"alerts"`
+	g.Meta            `path:"/webhook/alerts" method:"post" tags:"Ops" summary:"告警 Webhook 接入"`
+	Receiver          string            `json:"receiver"`
+	Status            string            `json:"status"`
+	GroupKey          string            `json:"groupKey"`
+	CommonLabels      map[string]string `json:"commonLabels"`
+	CommonAnnotations map[string]string `json:"commonAnnotations"`
+	ExternalURL       string            `json:"externalURL"`
+	Version           string            `json:"version"`
+	Alerts            []AlertEvent      `json:"alerts"`
+}
+
+// AlertmanagerWebhookReq is the signed internal Alertmanager endpoint payload.
+type AlertmanagerWebhookReq struct {
+	g.Meta            `path:"/alertmanager" method:"post" tags:"Ops" summary:"Alertmanager 签名 Webhook"`
+	Receiver          string            `json:"receiver"`
+	Status            string            `json:"status"`
+	GroupKey          string            `json:"groupKey"`
+	CommonLabels      map[string]string `json:"commonLabels"`
+	CommonAnnotations map[string]string `json:"commonAnnotations"`
+	ExternalURL       string            `json:"externalURL"`
+	Version           string            `json:"version"`
+	Alerts            []AlertEvent      `json:"alerts"`
 }
 
 // AlertEvent is a simplified alert payload.
 type AlertEvent struct {
-	Labels      map[string]string `json:"labels"`
-	Annotations map[string]string `json:"annotations"`
-	StartsAt    string            `json:"startsAt"`
+	Status       string            `json:"status"`
+	Labels       map[string]string `json:"labels"`
+	Annotations  map[string]string `json:"annotations"`
+	StartsAt     string            `json:"startsAt"`
+	EndsAt       string            `json:"endsAt"`
+	GeneratorURL string            `json:"generatorURL"`
+	Fingerprint  string            `json:"fingerprint"`
 }
 
 // AlertWebhookRes confirms webhook receipt.

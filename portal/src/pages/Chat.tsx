@@ -3,13 +3,15 @@ import {
   SendOutlined,
   ToolOutlined,
 } from '@ant-design/icons';
-import { Button, Checkbox, Input, Tag, Typography } from 'antd';
+import { Alert, Button, Checkbox, Input, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import PageTopbar from '@/components/PageTopbar';
 import {
   createSession,
+  describeRequestError,
   getMessages,
+  ApiError,
   sendChat,
   sendChatStream,
   type StreamEventCallback,
@@ -22,7 +24,19 @@ interface ChatMessage {
   content: string;
   citations?: CitationItem[];
   toolCalls?: ToolCallSummary[];
+  // Only present for replies created in this client. Historic messages predate
+  // the retrieval-status API and must not be assigned a guessed status.
+  ragEnabled?: boolean;
+  // Opaque diagnostic correlation handle for this newly created reply.
+  traceId?: string;
   timestamp: string;
+}
+
+interface RetryRequest {
+  text: string;
+  // Defined only for synchronous Chat, whose completed response can be
+  // durably replayed by the API. SSE does not yet have event replay.
+  idempotencyKey?: string;
 }
 
 export default function ChatPage() {
@@ -41,6 +55,7 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [retryRequest, setRetryRequest] = useState<RetryRequest | null>(null);
 
   // Options
   const [enableRag, setEnableRag] = useState(true);
@@ -109,19 +124,26 @@ export default function ChatPage() {
     setSessionId(null);
     setSessionTitle('新对话');
     setError(null);
+    setRetryRequest(null);
     setSending(false);
     setStreaming(false);
     inputRef.current?.focus();
   }, []);
 
   // Send a message
-  const handleSend = useCallback(async () => {
-    const text = input.trim();
+  const handleSend = useCallback(async (retry?: RetryRequest) => {
+    const text = (retry?.text ?? input).trim();
     if (!text || sendingRef.current) return;
+    const isRetry = Boolean(retry);
+    // New user input starts a new logical turn. A manual retry reuses the
+    // same key, allowing the backend to return its durable safe response if
+    // the browser lost the original response after execution completed.
+    const idempotencyKey = useStream ? undefined : (retry?.idempotencyKey ?? crypto.randomUUID());
 
     sendingRef.current = true;
     setInput('');
     setError(null);
+    setRetryRequest(null);
 
     // Add user message immediately
     const userMsg: ChatMessage = {
@@ -129,7 +151,10 @@ export default function ChatPage() {
       content: text,
       timestamp: new Date().toISOString(),
     };
-    setMessages((prev) => [...prev, userMsg]);
+    // A retry refers to the same logical user turn. The prior failed stream
+    // was not persisted server-side, so adding a second local user bubble
+    // would misrepresent the conversation.
+    if (!isRetry) setMessages((prev) => [...prev, userMsg]);
     scrollToBottom();
 
     // Ensure session
@@ -138,6 +163,7 @@ export default function ChatPage() {
       sid = await ensureSession(text.slice(0, 30));
     } catch (err: any) {
       setError(`创建会话失败: ${err.message}`);
+      setRetryRequest(null);
       sendingRef.current = false;
       return;
     }
@@ -150,6 +176,7 @@ export default function ChatPage() {
       const assistantMsg: ChatMessage = {
         role: 'assistant',
         content: '',
+        ragEnabled: enableRag,
         timestamp: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, assistantMsg]);
@@ -211,14 +238,30 @@ export default function ChatPage() {
             });
           } catch { /* ignore parse errors */ }
         },
-        onError: (errMsg) => {
-          setError(errMsg);
+        onError: (err) => {
+          setError(describeRequestError(err));
+          setRetryRequest(err instanceof ApiError && err.code === 50304 ? { text } : null);
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            return last?.role === 'assistant' && !last.content ? prev.slice(0, -1) : prev;
+          });
           setStreaming(false);
           setSending(false);
           sendingRef.current = false;
           abortRef.current = null;
         },
-        onDone: () => {
+        onDone: (data) => {
+          try {
+            const traceId = (JSON.parse(data) as { trace_id?: string }).trace_id;
+            if (traceId) {
+              setMessages((prev) => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                if (last?.role === 'assistant') updated[updated.length - 1] = { ...last, traceId };
+                return updated;
+              });
+            }
+          } catch { /* legacy done payload has no trace identity */ }
           setStreaming(false);
           setSending(false);
           sendingRef.current = false;
@@ -231,6 +274,7 @@ export default function ChatPage() {
         abortRef.current = sendChatStream(sid, text, { enable_rag: enableRag, enable_tools: enableTools }, callbacks);
       } catch (err: any) {
         setError(err.message || '流式请求失败');
+        setRetryRequest(null);
         setStreaming(false);
         setSending(false);
         sendingRef.current = false;
@@ -238,12 +282,19 @@ export default function ChatPage() {
     } else {
       // Synchronous mode
       try {
-        const result = await sendChat(sid, text, { enable_rag: enableRag, enable_tools: enableTools });
+        const result = await sendChat(
+          sid,
+          text,
+          { enable_rag: enableRag, enable_tools: enableTools },
+          idempotencyKey,
+        );
         const assistantMsg: ChatMessage = {
           role: 'assistant',
           content: result.answer,
           citations: result.citations || [],
           toolCalls: result.tool_calls || [],
+          ragEnabled: enableRag,
+          traceId: result.trace_id,
           timestamp: new Date().toISOString(),
         };
         setMessages((prev) => [...prev, assistantMsg]);
@@ -254,7 +305,16 @@ export default function ChatPage() {
           setSessionTitle(text.slice(0, 30) + (text.length > 30 ? '...' : ''));
         }
       } catch (err: any) {
-        setError(err.message || '请求失败');
+        setError(describeRequestError(err));
+        // A network loss and a completed server turn are indistinguishable to
+        // the browser, so retain the key and let the API replay safely. In
+        // contrast, an explicit API error has already told us the turn did
+        // not complete (or is fail-closed); retry it as a new execution
+        // request instead of leaving the user in a permanent 409 loop.
+        setRetryRequest({
+          text,
+          idempotencyKey: err instanceof ApiError ? undefined : idempotencyKey,
+        });
       } finally {
         setSending(false);
         sendingRef.current = false;
@@ -324,9 +384,27 @@ export default function ChatPage() {
                       ) : msg.content)}
                     </Typography.Paragraph>
 
+                    {/* A missing citation is deliberately presented as an
+                        unverifiable answer, not as a successful RAG lookup.
+                        The API currently has no retrieval outcome field. */}
+                    {msg.ragEnabled &&
+                      (!msg.citations || msg.citations.length === 0) &&
+                      !(streaming && i === messages.length - 1) && (
+                        <Alert
+                          type="warning"
+                          showIcon
+                          message="本次回答未提供可验证的知识库引用"
+                          description="可能未命中、置信度不足、检索不可用或发生回退；请勿将其视为内部知识库结论。"
+                          style={{ marginTop: 12 }}
+                        />
+                      )}
+
                     {/* Citations */}
                     {msg.citations && msg.citations.length > 0 && (
                       <div style={{ marginTop: 12 }}>
+                        <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                          已引用 {msg.citations.length} 条知识库资料
+                        </Typography.Text>
                         {msg.citations.map((c, ci) => (
                           <div key={ci} className="citation-card">
                             <strong style={{ color: '#166534' }}>
@@ -357,6 +435,11 @@ export default function ChatPage() {
                         ))}
                       </div>
                     )}
+                    {msg.traceId && (
+                      <Typography.Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+                        <Link to={`/traces/${encodeURIComponent(msg.traceId)}`}>查看执行 Trace：{msg.traceId.slice(0, 12)}…</Link>
+                      </Typography.Text>
+                    )}
                   </div>
                 )}
               </div>
@@ -367,6 +450,17 @@ export default function ChatPage() {
           {error && (
             <div style={{ padding: '12px 16px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, marginBottom: 16 }}>
               <Typography.Text type="danger">{error}</Typography.Text>
+              {retryRequest && (
+                <Button
+                  size="small"
+                  type="link"
+                  onClick={() => handleSend(retryRequest)}
+                  disabled={sending || streaming}
+                  style={{ marginLeft: 8 }}
+                >
+                  重试发送
+                </Button>
+              )}
             </div>
           )}
         </div>
@@ -389,7 +483,7 @@ export default function ChatPage() {
             placeholder="输入问题，Enter 发送…"
             autoSize={{ minRows: 2, maxRows: 6 }}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => { setInput(e.target.value); setRetryRequest(null); }}
             onKeyDown={handleKeyDown}
             disabled={sending || streaming}
           />
@@ -420,7 +514,7 @@ export default function ChatPage() {
             <Button
               type="primary"
               icon={<SendOutlined />}
-              onClick={handleSend}
+              onClick={() => handleSend()}
               loading={sending || streaming}
               disabled={!input.trim()}
             >

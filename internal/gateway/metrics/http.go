@@ -53,8 +53,20 @@ func HTTPMetrics(r *ghttp.Request) {
 // normalizePath collapses dynamic path segments to limit metric cardinality.
 func normalizePath(path string) string {
 	switch path {
-	case "/metrics", "/health/live", "/health/ready":
+	case "/metrics", "/health/live", "/health/ready", "/api.json",
+		"/api/v1/sessions", "/api/v1/chat", "/api/v1/chat/stream",
+		"/api/v1/knowledge/fault-cards", "/api/v1/admin/vector-gc/tasks",
+		"/api/v1/approvals", "/api/v1/admin/agent-configs", "/api/v1/ping",
+		"/api/v1/knowledge/documents/upload", "/api/v1/knowledge/documents",
+		"/api/v1/ops/analyze", "/api/v1/webhook/alerts", "/api/v1/alertmanager",
+		"/api/v1/ops/tasks", "/api/v1/me", "/api/v1/auth/token":
 		return path
+	}
+	if strings.HasPrefix(path, "/api/v1/admin/vector-gc/documents/") {
+		segments := strings.Split(strings.TrimPrefix(path, "/api/v1/admin/vector-gc/documents/"), "/")
+		if len(segments) == 4 && segments[1] == "tasks" && segments[3] == "redrive" {
+			return "/api/v1/admin/vector-gc/documents/{doc_id}/tasks/{target_key}/redrive"
+		}
 	}
 
 	patterns := []struct {
@@ -64,9 +76,11 @@ func normalizePath(path string) string {
 		{"/api/v1/sessions/", "/api/v1/sessions/{id}"},
 		{"/api/v1/knowledge/documents/", "/api/v1/knowledge/documents/{id}"},
 		{"/api/v1/knowledge/index-tasks/", "/api/v1/knowledge/index-tasks/{id}"},
+		{"/api/v1/knowledge/fault-cards/", "/api/v1/knowledge/fault-cards/{id}"},
 		{"/api/v1/ops/tasks/", "/api/v1/ops/tasks/{id}"},
 		{"/api/v1/approvals/", "/api/v1/approvals/{id}"},
 		{"/api/v1/admin/agent-configs/", "/api/v1/admin/agent-configs/{version}"},
+		{"/api/v1/traces/", "/api/v1/traces/{trace_id}"},
 	}
 
 	for _, p := range patterns {
@@ -80,5 +94,9 @@ func normalizePath(path string) string {
 		return p.normalized
 	}
 
-	return path
+	// Request URLs are attacker-controlled. Never use an unknown path as a
+	// Prometheus label: scanners or malformed requests could otherwise create
+	// one time series per random suffix. Known routes above keep their useful
+	// per-endpoint visibility; everything else intentionally coalesces.
+	return "/unknown"
 }

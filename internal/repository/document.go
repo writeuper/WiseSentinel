@@ -2,8 +2,12 @@ package repository
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
 	"time"
 
+	"github.com/gogf/gf/v2/database/gdb"
 	"github.com/gogf/gf/v2/frame/g"
 )
 
@@ -24,6 +28,15 @@ type Document struct {
 
 // DocumentRepo manages ws_document persistence.
 type DocumentRepo struct{}
+
+// RAGInventory is the global logical retrieval inventory. It intentionally
+// contains no tenant or document dimensions so it can be exported safely as
+// a low-cardinality platform metric.
+type RAGInventory struct {
+	ActiveDocuments       int
+	ActivePublishedChunks int
+	ActiveLegacyDocuments int
+}
 
 func NewDocumentRepo() *DocumentRepo {
 	return &DocumentRepo{}
@@ -63,6 +76,9 @@ func (r *DocumentRepo) Get(ctx context.Context, tenantID, docID string) (*Docume
 		Where("doc_id", docID).
 		Scan(&row)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	if row.DocID == "" {
@@ -135,4 +151,77 @@ func (r *DocumentRepo) SoftDelete(ctx context.Context, tenantID, docID string) e
 		Data(g.Map{"status": "deleted"}).
 		Update()
 	return err
+}
+
+// SoftDeleteAndEnqueueVectorGC atomically fences runnable index tasks, makes
+// the document lifecycle transition, and records the document_all cleanup
+// intent. Keeping all three state changes in one transaction prevents a
+// failed delete from leaving an active document whose index work was already
+// cancelled. Retrieval fails closed as soon as the transaction commits;
+// physical Milvus deletion is retried separately.
+func (r *DocumentRepo) SoftDeleteAndEnqueueVectorGC(ctx context.Context, tenantID, docID string) error {
+	if tenantID == "" || docID == "" {
+		return fmt.Errorf("tenant_id and doc_id are required")
+	}
+	return g.DB().Transaction(ctx, func(txCtx context.Context, tx gdb.TX) error {
+		// Lock task rows before the document row. PublishIfOwned follows the
+		// same task-then-document order, avoiding an inverted lock order during
+		// delete-versus-publish races. Clearing the token fences an in-flight
+		// worker from publishing after this transaction commits.
+		if _, err := tx.Model("ws_index_task").Ctx(txCtx).
+			Where("tenant_id", tenantID).Where("doc_id", docID).
+			WhereIn("status", []string{"pending", "running"}).
+			Data(g.Map{
+				"status":           "failed",
+				"error_msg":        "document deleted",
+				"finished_at":      time.Now(),
+				"execution_token":  "",
+				"lease_expires_at": nil,
+			}).Update(); err != nil {
+			return err
+		}
+		result, err := tx.Model("ws_document").Ctx(txCtx).
+			Where("tenant_id", tenantID).Where("doc_id", docID).Where("status", "active").
+			Data(g.Map{"status": "deleted"}).Update()
+		if err != nil {
+			return err
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rows != 1 {
+			return fmt.Errorf("active document not found")
+		}
+		return enqueueVectorGCTx(txCtx, tx, tenantID, docID, VectorGCTargetDocumentAll, 0, "document_deleted")
+	})
+}
+
+// ActiveRAGInventory counts only active documents and their current published
+// index generation. Historical successful tasks, superseded generations and
+// deleted documents are intentionally excluded; physical Milvus rows need a
+// separate collection/GC measurement and must not be inferred from this SQL.
+func (r *DocumentRepo) ActiveRAGInventory(ctx context.Context) (RAGInventory, error) {
+	var inventory RAGInventory
+	err := g.DB().GetScan(ctx, &inventory, `
+		SELECT
+			COUNT(*) AS active_documents,
+			COALESCE(SUM(CASE
+				WHEN state.active_generation > 0
+				 AND task.status = 'success'
+				 AND task.generation = state.active_generation
+				THEN task.chunk_count ELSE 0 END), 0) AS active_published_chunks,
+			COALESCE(SUM(CASE
+				WHEN state.doc_id IS NULL OR state.active_generation = 0
+				THEN 1 ELSE 0 END), 0) AS active_legacy_documents
+		FROM ws_document document
+		LEFT JOIN ws_document_index_state state
+			ON state.tenant_id = document.tenant_id AND state.doc_id = document.doc_id
+		LEFT JOIN ws_index_task task
+			ON task.tenant_id = document.tenant_id
+			AND task.doc_id = document.doc_id
+			AND task.generation = state.active_generation
+		WHERE document.status = 'active'
+	`)
+	return inventory, err
 }

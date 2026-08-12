@@ -57,6 +57,22 @@ type DeleteDocumentRes struct {
 	Status string `json:"status"`
 }
 
+// ReindexDocumentReq schedules a new, generation-fenced index for an active
+// document. It is used after a document update or embedding-profile migration;
+// the existing readable generation remains available until the new one is
+// published by the worker.
+type ReindexDocumentReq struct {
+	g.Meta `path:"/knowledge/documents/{doc_id}/reindex" method:"post" tags:"Knowledge" summary:"重建文档向量索引"`
+	DocID  string `json:"doc_id" in:"path" v:"required"`
+}
+
+// ReindexDocumentRes returns the durable asynchronous index task.
+type ReindexDocumentRes struct {
+	DocID  string `json:"doc_id"`
+	TaskID string `json:"task_id"`
+	Status string `json:"status"`
+}
+
 // GetIndexTaskReq queries index task status.
 type GetIndexTaskReq struct {
 	g.Meta `path:"/knowledge/index-tasks/{task_id}" method:"get" tags:"Knowledge" summary:"查询索引任务"`

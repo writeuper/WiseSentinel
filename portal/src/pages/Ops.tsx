@@ -1,8 +1,8 @@
-import { CheckCircleOutlined, ClockCircleOutlined, PlayCircleOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
+import { CheckCircleOutlined, ClockCircleOutlined, ExperimentOutlined, PlayCircleOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Empty, Input, Select, Slider, Space, Spin, Switch, Table, Tag, Timeline, Typography, message } from 'antd';
-import { opsAnalyze, getOpsTask, listOpsTasks } from '@/api/client';
-import type { OpsAnalyzeData, OpsTaskData, OpsTaskSummary } from '@/api/types';
+import { Alert, Button, Card, Collapse, Descriptions, Empty, Input, Select, Slider, Space, Spin, Switch, Table, Tag, Timeline, Typography, message } from 'antd';
+import { opsAnalyze, getOpsTask, getTrace, listOpsTasks } from '@/api/client';
+import type { AgentTraceData, AgentTraceStep, OpsAnalyzeData, OpsEvidence, OpsFaultConclusion, OpsTaskData, OpsTaskSummary, OpsTiming } from '@/api/types';
 import { formatTime } from '@/lib/format';
 import PageTopbar from '@/components/PageTopbar';
 
@@ -24,6 +24,7 @@ export default function OpsPage() {
 
   const [currentResult, setCurrentResult] = useState<OpsAnalyzeData | null>(null);
   const [polledTask, setPolledTask] = useState<OpsTaskData | null>(null);
+  const [traceData, setTraceData] = useState<AgentTraceData | null>(null);
 
   const [tasks, setTasks] = useState<OpsTaskSummary[]>([]);
   const [taskTotal, setTaskTotal] = useState(0);
@@ -53,6 +54,19 @@ export default function OpsPage() {
     return () => clearInterval(t);
   }, [loadTasks]);
 
+  const loadTrace = useCallback(async (traceId?: string) => {
+    if (!traceId) {
+      setTraceData(null);
+      return;
+    }
+    try {
+      const data = await getTrace(traceId);
+      setTraceData(data);
+    } catch {
+      setTraceData(null);
+    }
+  }, []);
+
   // Poll the currently-active async task.
   useEffect(() => {
     if (!currentResult || currentResult.status === 'success' || currentResult.status === 'failed') {
@@ -64,8 +78,17 @@ export default function OpsPage() {
         setPolledTask(data);
         if (data.status === 'success' || data.status === 'failed') {
           setCurrentResult((prev) =>
-            prev ? { ...prev, status: data.status, result: data.result || '', detail: data.detail || [] } : prev,
+            prev ? {
+              ...prev,
+              status: data.status,
+              result: data.result || '',
+              detail: data.detail || [],
+              evidence: data.evidence,
+              conclusion: data.conclusion,
+              timing: data.timing,
+            } : prev,
           );
+          loadTrace(currentResult.trace_id);
           loadTasks();
         }
       } catch {
@@ -73,7 +96,7 @@ export default function OpsPage() {
       }
     }, POLL_MS);
     return () => clearInterval(t);
-  }, [currentResult, loadTasks]);
+  }, [currentResult, loadTasks, loadTrace]);
 
   const handleStart = async () => {
     setSubmitting(true);
@@ -86,12 +109,15 @@ export default function OpsPage() {
           result: '',
           detail: [],
           trace_id: data.trace_id,
+          timing: data.timing,
         });
         setPolledTask(null);
+        setTraceData(null);
         message.success(`已提交异步任务 ${data.task_id}`);
       } else {
         setCurrentResult(data);
         setPolledTask(null);
+        loadTrace(data.trace_id);
       }
       loadTasks();
     } catch (e) {
@@ -135,8 +161,12 @@ export default function OpsPage() {
                   result: data.result,
                   detail: data.detail,
                   trace_id: '',
+                  evidence: data.evidence,
+                  conclusion: data.conclusion,
+                  timing: data.timing,
                 });
                 setPolledTask(data);
+                setTraceData(null);
               } catch (e) {
                 message.error(e instanceof Error ? e.message : '查询失败');
               }
@@ -158,6 +188,9 @@ export default function OpsPage() {
     const status = polledTask?.status || currentResult.status;
     const result = polledTask?.result ?? currentResult.result;
     const detail = polledTask?.detail ?? currentResult.detail;
+    const evidence = polledTask?.evidence ?? currentResult.evidence;
+    const conclusion = polledTask?.conclusion ?? currentResult.conclusion;
+    const timing = polledTask?.timing ?? currentResult.timing;
 
     return (
       <Card
@@ -186,12 +219,22 @@ export default function OpsPage() {
         }
         extra={!isDone && <Spin size="small" />}
       >
-        {result ? (
+        {conclusion ? (
+          <ConclusionCard conclusion={conclusion} />
+        ) : result ? (
           <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>
             {result}
           </Typography.Paragraph>
         ) : (
           <Typography.Text type="secondary">等待模型输出…</Typography.Text>
+        )}
+        {timing && <TimingCard timing={timing} />}
+        {evidence && evidence.length > 0 && <EvidenceList evidence={evidence} />}
+        {traceData?.steps && traceData.steps.length > 0 && <TraceStepList steps={traceData.steps} />}
+        {currentResult.trace_id && !traceData && isDone && (
+          <Button size="small" onClick={() => loadTrace(currentResult.trace_id)} style={{ marginTop: 12 }}>
+            加载 Trace 步骤
+          </Button>
         )}
         {detail && detail.length > 0 && (
           <>
@@ -303,5 +346,175 @@ export default function OpsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Timing and Trace cards
+// ---------------------------------------------------------------------------
+
+function formatDuration(ms?: number) {
+  if (!ms || ms <= 0) return '0ms';
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(2)}s`;
+}
+
+function TimingCard({ timing }: { timing: OpsTiming }) {
+  return (
+    <Card size="small" title="排障耗时" style={{ marginTop: 16 }}>
+      <Descriptions size="small" column={3}>
+        <Descriptions.Item label="排队耗时">{formatDuration(timing.queue_duration_ms)}</Descriptions.Item>
+        <Descriptions.Item label="执行耗时">{formatDuration(timing.run_duration_ms)}</Descriptions.Item>
+        <Descriptions.Item label="端到端耗时">{formatDuration(timing.e2e_duration_ms)}</Descriptions.Item>
+        <Descriptions.Item label="创建时间">{formatTime(timing.created_at || '')}</Descriptions.Item>
+        <Descriptions.Item label="开始时间">{formatTime(timing.started_at || '')}</Descriptions.Item>
+        <Descriptions.Item label="完成时间">{formatTime(timing.finished_at || '')}</Descriptions.Item>
+      </Descriptions>
+    </Card>
+  );
+}
+
+function TraceStepList({ steps }: { steps: AgentTraceStep[] }) {
+  return (
+    <>
+      <Typography.Title level={5} style={{ marginTop: 16 }}>
+        Trace 步骤回放（{steps.length}） <Tag color="blue">服务端脱敏摘要</Tag>
+      </Typography.Title>
+      <Timeline
+        items={steps.map((s) => ({
+          key: s.id,
+          color: s.status === 'error' ? 'red' : s.step_type === 'tool' ? 'blue' : 'green',
+          children: (
+            <Collapse
+              size="small"
+              items={[{
+                key: s.id,
+                label: (
+                  <Space wrap>
+                    <Tag>{s.step_type}</Tag>
+                    <Typography.Text style={{ fontFamily: 'monospace' }}>{s.step_name}</Typography.Text>
+                    <Tag color={s.status === 'error' ? 'error' : 'success'}>{s.status}</Tag>
+                    <Typography.Text type="secondary">{formatDuration(s.latency_ms)}</Typography.Text>
+                    {s.created_at && <Typography.Text type="secondary">{formatTime(s.created_at)}</Typography.Text>}
+                  </Space>
+                ),
+                children: (
+                  <div>
+                    {s.input_summary && (
+                      <div style={{ marginBottom: 8 }}>
+                        <Typography.Text type="secondary">输入摘要：</Typography.Text>
+                        <pre style={{ margin: '4px 0 0', fontSize: 12, background: '#fafafa', padding: 8, maxHeight: 160, overflow: 'auto' }}>{s.input_summary}</pre>
+                      </div>
+                    )}
+                    {s.output_summary && (
+                      <div style={{ marginBottom: 8 }}>
+                        <Typography.Text type="secondary">输出摘要：</Typography.Text>
+                        <pre style={{ margin: '4px 0 0', fontSize: 12, background: '#fafafa', padding: 8, maxHeight: 220, overflow: 'auto' }}>{s.output_summary}</pre>
+                      </div>
+                    )}
+                    {s.error_msg && <Alert type="error" message={s.error_msg} />}
+                  </div>
+                ),
+              }]}
+            />
+          ),
+        }))}
+      />
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Structured conclusion card
+// ---------------------------------------------------------------------------
+
+const confidenceColor: Record<string, string> = {
+  high: 'success',
+  mid: 'processing',
+  low: 'warning',
+};
+
+function ConclusionCard({ conclusion }: { conclusion: OpsFaultConclusion }) {
+  const fields: { label: string; value: string }[] = [
+    { label: '故障现象', value: conclusion.symptom },
+    { label: '影响范围', value: conclusion.impact },
+    { label: '根因判断', value: conclusion.root_cause },
+    { label: '临时止血', value: conclusion.workaround },
+    { label: '根治建议', value: conclusion.remediation },
+  ];
+  return (
+    <Card
+      size="small"
+      style={{ marginBottom: 16, background: '#f6ffed', border: '1px solid #b7eb8f' }}
+      title={
+        <Space>
+          <ExperimentOutlined style={{ color: '#52c41a' }} />
+          <Typography.Text strong>结构化结论</Typography.Text>
+          <Tag color={confidenceColor[conclusion.confidence] || 'default'}>
+            置信度: {conclusion.confidence || 'mid'}
+          </Tag>
+          {conclusion.source && <Tag>{conclusion.source}</Tag>}
+        </Space>
+      }
+    >
+      {fields.map((f) =>
+        f.value ? (
+          <div key={f.label} style={{ marginBottom: 8 }}>
+            <Typography.Text type="secondary" style={{ marginRight: 8 }}>
+              {f.label}：
+            </Typography.Text>
+            <Typography.Text style={{ whiteSpace: 'pre-wrap' }}>{f.value}</Typography.Text>
+          </div>
+        ) : null,
+      )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tool evidence list
+// ---------------------------------------------------------------------------
+
+const evidenceStatusColor: Record<string, string> = {
+  success: 'success',
+  error: 'error',
+  awaiting_approval: 'warning',
+};
+
+function EvidenceList({ evidence }: { evidence: OpsEvidence[] }) {
+  return (
+    <>
+      <Typography.Title level={5} style={{ marginTop: 16 }}>
+        工具证据链（{evidence.length}） <Tag color="blue">服务端脱敏摘要</Tag>
+      </Typography.Title>
+      <Collapse
+        size="small"
+        items={evidence.map((e, i) => ({
+          key: i,
+          label: (
+            <Space>
+              <Tag color={evidenceStatusColor[e.status] || 'default'}>{e.status}</Tag>
+              <Typography.Text style={{ fontFamily: 'monospace' }}>{e.tool_name}</Typography.Text>
+              {e.source ? <Tag>{e.source}</Tag> : null}
+              {e.latency_ms ? (
+                <Typography.Text type="secondary">{e.latency_ms}ms</Typography.Text>
+              ) : null}
+              {e.timestamp ? (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {e.timestamp}
+                </Typography.Text>
+              ) : null}
+            </Space>
+          ),
+          children: (
+            <Typography.Text type="secondary">
+              内容已由服务端抑制，不在运营平面展示。
+              {e.input_bytes ? ` 入参 ${e.input_bytes} bytes。` : ''}
+              {e.output_bytes ? ` 出参 ${e.output_bytes} bytes。` : ''}
+            </Typography.Text>
+          ),
+        }))}
+      />
+    </>
   );
 }

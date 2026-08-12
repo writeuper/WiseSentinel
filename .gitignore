@@ -20,5 +20,10 @@
 /portal/node_modules/
 /portal/dist/
 /portal/tsconfig*.tsbuildinfo
-/docs/
+/docs/*
+!/docs/quality/
+!/docs/quality/*.md
+!/docs/knowledge/
+!/docs/knowledge/runbooks/
+!/docs/knowledge/runbooks/*.md
 /platform

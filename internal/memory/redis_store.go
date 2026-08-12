@@ -86,7 +86,20 @@ func (s *RedisSessionStore) GetHistory(ctx context.Context, tenantID, sessionID 
 }
 
 // AppendMessages serializes and RPUSHes messages, then LTRIM and EXPIRE.
+// It checks the durable session fence both before and after the Redis write.
+// Deletion first flips the MySQL status and then clears Redis. Therefore, if
+// deletion races a completed model call, either DeleteSession clears the new
+// history or this post-write check clears it; an inactive session cannot keep
+// an orphaned conversation window solely because generation finished late.
 func (s *RedisSessionStore) AppendMessages(ctx context.Context, tenantID, sessionID string, msgs ...*domain.Message) error {
+	active, err := s.sessions.IsActive(ctx, tenantID, sessionID)
+	if err != nil {
+		return apperr.Wrap(err, apperr.ErrInternal)
+	}
+	if !active {
+		return apperr.ErrNotFound
+	}
+
 	key := redisKey(tenantID, sessionID)
 	redis := g.Redis()
 
@@ -111,12 +124,43 @@ func (s *RedisSessionStore) AppendMessages(ctx context.Context, tenantID, sessio
 	if _, err := redis.Do(ctx, "EXPIRE", key, ttlSeconds); err != nil {
 		return apperr.Wrap(err, apperr.ErrInternal)
 	}
+
+	active, err = s.sessions.IsActive(ctx, tenantID, sessionID)
+	if err != nil {
+		return apperr.Wrap(err, apperr.ErrInternal)
+	}
+	if !active {
+		// Delete only this exact tenant/session key. The durable status fence has
+		// already hidden the session; this prevents a late model completion from
+		// retaining Redis data until its TTL.
+		if _, deleteErr := redis.Do(ctx, "DEL", key); deleteErr != nil {
+			return apperr.Wrap(deleteErr, apperr.ErrInternal)
+		}
+		return apperr.ErrNotFound
+	}
 	return nil
 }
 
 // UpdateSessionTitle updates the session title in MySQL (first user message).
 func (s *RedisSessionStore) UpdateSessionTitle(ctx context.Context, tenantID, sessionID, title string) error {
 	return s.sessions.UpdateTitle(ctx, tenantID, sessionID, title)
+}
+
+// DeleteSession first writes the durable access fence and then removes the
+// bounded Redis message window. A caller can no longer read an inactive
+// session even if Redis cleanup is temporarily unavailable.
+func (s *RedisSessionStore) DeleteSession(ctx context.Context, tenantID, sessionID string) error {
+	deleted, err := s.sessions.DeactivateAndDeleteTurns(ctx, tenantID, sessionID)
+	if err != nil {
+		return apperr.Wrap(err, apperr.ErrInternal)
+	}
+	if !deleted {
+		return apperr.ErrNotFound
+	}
+	if _, err := g.Redis().Do(ctx, "DEL", redisKey(tenantID, sessionID)); err != nil {
+		return apperr.Wrap(err, apperr.ErrInternal)
+	}
+	return nil
 }
 
 // ListSessions returns paginated sessions for a user.

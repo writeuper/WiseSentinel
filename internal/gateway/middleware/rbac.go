@@ -17,7 +17,7 @@ const (
 
 // RBAC enforces role-based access for protected routes.
 func RBAC(r *ghttp.Request) {
-	if isPublicPath(r.URL.Path) {
+	if isPublicPath(r.URL.Path) || isWebhookPath(r.URL.Path) {
 		r.Middleware.Next()
 		return
 	}
@@ -43,7 +43,7 @@ func requiredRoles(path, method string) []string {
 	case strings.HasPrefix(path, "/api/v1/ops"):
 		return []string{"operator", "sre_admin", "platform_admin"}
 	case strings.HasPrefix(path, "/api/v1/knowledge") && method == httpMethodDelete:
-		return []string{"sre_admin", "platform_admin"}
+		return []string{"operator", "sre_admin", "platform_admin"}
 	case strings.HasPrefix(path, "/api/v1/knowledge") && method == httpMethodPost:
 		return []string{"operator", "sre_admin", "platform_admin"}
 	case strings.HasPrefix(path, "/api/v1/approvals"):

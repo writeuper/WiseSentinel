@@ -40,9 +40,12 @@ func NewExecutor(ctx context.Context, modelRouter domain.ModelRouter, toolGatewa
 		return nil, fmt.Errorf("list ops tools: %w", err)
 	}
 
-	// 3. Build the executor
+	// 3. Build the executor. Wrap the model so each executor step forces a
+	//    tool call — Volces Ark and similar OpenAI-compatible providers do not
+	//    reliably call tools under tool_choice=auto, which would otherwise
+	//    surface as "[NodeRunError] no tool call" in the executor.
 	return planexecute.NewExecutor(ctx, &planexecute.ExecutorConfig{
-		Model: execModel,
+		Model: newForceToolModel(execModel),
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{
 				Tools: einoTools,

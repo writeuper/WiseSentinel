@@ -11,7 +11,7 @@ import (
 
 // Register wires HTTP routes and middleware for the platform API.
 func Register(s *ghttp.Server, app *bootstrap.App) {
-	metrics.Register(s)
+	metrics.Register(s, app)
 	s.Use(metrics.HTTPMetrics)
 	handler.RegisterHealth(s, app)
 
@@ -29,6 +29,19 @@ func Register(s *ghttp.Server, app *bootstrap.App) {
 			middleware.UnifiedResponse,
 		)
 
+		group.Bind(handler.NewV1(app))
+	})
+
+	s.Group("/internal/webhooks", func(group *ghttp.RouterGroup) {
+		group.Middleware(
+			middleware.Recovery,
+			middleware.Trace,
+			middleware.WebhookTenant,
+			middleware.AlertmanagerSignature,
+			middleware.RateLimit,
+			middleware.RequestLogger,
+			middleware.UnifiedResponse,
+		)
 		group.Bind(handler.NewV1(app))
 	})
 

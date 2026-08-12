@@ -19,8 +19,8 @@ func RegisterHealth(s *ghttp.Server, app *bootstrap.App) {
 	s.BindHandler("/health/ready", func(r *ghttp.Request) {
 		components := app.Ready(r.Context())
 		ready := true
-		for _, status := range components {
-			if status != "up" && status != "skipped" {
+		for name, status := range components {
+			if status != "up" && status != "skipped" && !(status == "degraded" && name == "rag") {
 				ready = false
 				break
 			}

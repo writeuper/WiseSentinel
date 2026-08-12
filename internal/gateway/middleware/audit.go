@@ -24,13 +24,17 @@ func Audit(r *ghttp.Request) {
 		return
 	}
 
+	resourceID := r.URL.Path
+	if len(resourceID) > 255 {
+		resourceID = resourceID[:255]
+	}
 	_, err := g.DB().Insert(r.Context(), "ws_audit_log", g.Map{
 		"tenant_id":     ctxkeys.TenantIDFrom(r.Context()),
 		"trace_id":      ctxkeys.TraceIDFrom(r.Context()),
 		"user_id":       ctxkeys.UserIDFrom(r.Context()),
 		"action":        action,
 		"resource_type": "http",
-		"resource_id":   r.URL.Path,
+		"resource_id":   resourceID,
 		"response_code": r.Response.Status,
 		"latency_ms":    time.Since(start).Milliseconds(),
 	})
@@ -41,6 +45,10 @@ func Audit(r *ghttp.Request) {
 
 func auditAction(path, method string) string {
 	switch {
+	case strings.HasPrefix(path, "/api/v1/admin/vector-gc") && method == httpMethodPost:
+		return "vector_gc.redrive.request"
+	case strings.HasPrefix(path, "/api/v1/admin/vector-gc") && method == httpMethodGet:
+		return "vector_gc.read"
 	case strings.HasPrefix(path, "/api/v1/chat"):
 		return "chat.invoke"
 	case strings.HasPrefix(path, "/api/v1/knowledge") && method == httpMethodPost:
@@ -51,6 +59,10 @@ func auditAction(path, method string) string {
 		return "doc.read"
 	case strings.HasPrefix(path, "/api/v1/ops"):
 		return "ops.analyze"
+	case strings.HasPrefix(path, "/api/v1/approvals"):
+		return "approval.decide"
+	case strings.HasPrefix(path, "/api/v1/traces"):
+		return "trace.read"
 	default:
 		return ""
 	}

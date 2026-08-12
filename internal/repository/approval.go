@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"wisesentinel-platform/internal/pkg/redact"
+
 	"github.com/gogf/gf/v2/frame/g"
 )
 
@@ -49,6 +51,7 @@ func (r *ApprovalRepo) GetPending(ctx context.Context, tenantID, approvalID stri
 		Where("tenant_id", tenantID).
 		Where("approval_id", approvalID).
 		Where("status", "pending").
+		Where("expired_at >", time.Now()).
 		Scan(&row)
 	if err != nil {
 		return nil, err
@@ -71,6 +74,7 @@ func (r *ApprovalRepo) ListPending(ctx context.Context, tenantID string, page, s
 	err := g.DB().Model("ws_approval").Ctx(ctx).
 		Where("tenant_id", tenantID).
 		Where("status", "pending").
+		Where("expired_at >", time.Now()).
 		OrderAsc("created_at").
 		Page(page, size).
 		Scan(&rows)
@@ -89,16 +93,28 @@ func (r *ApprovalRepo) ListPending(ctx context.Context, tenantID string, page, s
 
 // Decide updates an approval record with the decision.
 func (r *ApprovalRepo) Decide(ctx context.Context, tenantID, approvalID, decision, approverID, comment string) (bool, error) {
+	// A generic approval record has no durable execution intent, requester
+	// binding or side-effect executor. It may safely record a terminal
+	// rejection, but must never record an approval that downstream callers can
+	// mistake for completed execution. Effectful approval types use their own
+	// repository transaction (for example VectorGCRepo.ApproveRedrive).
+	if decision == "approved" {
+		return false, nil
+	}
 	now := time.Now()
 	result, err := g.DB().Model("ws_approval").Ctx(ctx).
 		Where("tenant_id", tenantID).
 		Where("approval_id", approvalID).
 		Where("status", "pending").
+		Where("expired_at >", now).
 		Data(g.Map{
 			"status":      decision,
 			"approver_id": approverID,
-			"comment":     comment,
-			"updated_at":  now,
+			// Reviewer comments are untrusted text and part of durable audit
+			// storage. Preserve a bounded diagnostic reason without allowing a
+			// pasted credential to become a new persistence sink.
+			"comment":    redact.Summary(comment, 2000),
+			"updated_at": now,
 		}).
 		Update()
 	if err != nil {

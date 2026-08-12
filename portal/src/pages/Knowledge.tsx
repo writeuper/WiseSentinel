@@ -3,7 +3,7 @@ import type { UploadProps } from 'antd';
 import { App, Button, Popconfirm, Table, Tag, Upload } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import type { DocumentItem } from '@/api/types';
-import { deleteDocument, getIndexTask, listDocuments, uploadDocument } from '@/api/client';
+import { deleteDocument, getIndexTask, listDocuments, reindexDocument, uploadDocument } from '@/api/client';
 import { formatTime } from '@/lib/format';
 import PageTopbar from '@/components/PageTopbar';
 
@@ -76,22 +76,40 @@ export default function KnowledgePage() {
       title: '操作',
       key: 'action',
       render: (_: unknown, row: DocumentItem) => (
-        <Popconfirm
-          title="确认删除该文档？"
-          onConfirm={async () => {
-            try {
-              await deleteDocument(row.doc_id);
-              message.success('已删除');
-              load();
-            } catch (e) {
-              message.error(e instanceof Error ? e.message : '删除失败');
-            }
-          }}
-        >
-          <Button size="small" danger icon={<DeleteOutlined />}>
-            删除
-          </Button>
-        </Popconfirm>
+        <>
+          <Popconfirm
+            title="重建将异步生成新向量版本；旧版本会保持可读，直到新版本发布。确认继续？"
+            onConfirm={async () => {
+              try {
+                const task = await reindexDocument(row.doc_id);
+                message.success(`已提交重建任务：${task.task_id}`);
+                load();
+              } catch (e) {
+                message.error(e instanceof Error ? e.message : '提交重建失败');
+              }
+            }}
+          >
+            <Button size="small" style={{ marginRight: 8 }}>
+              重建索引
+            </Button>
+          </Popconfirm>
+          <Popconfirm
+            title="确认删除该文档？"
+            onConfirm={async () => {
+              try {
+                await deleteDocument(row.doc_id);
+                message.success('已删除');
+                load();
+              } catch (e) {
+                message.error(e instanceof Error ? e.message : '删除失败');
+              }
+            }}
+          >
+            <Button size="small" danger icon={<DeleteOutlined />}>
+              删除
+            </Button>
+          </Popconfirm>
+        </>
       ),
     },
   ];

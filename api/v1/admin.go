@@ -17,11 +17,21 @@ type ListApprovalsRes struct {
 
 // ApprovalItem is an approval queue entry.
 type ApprovalItem struct {
-	ApprovalID   string `json:"approval_id"`
-	TaskID       string `json:"task_id"`
-	ApprovalType string `json:"approval_type"`
-	Status       string `json:"status"`
-	ExpiredAt    string `json:"expired_at"`
+	ApprovalID   string          `json:"approval_id"`
+	TaskID       string          `json:"task_id"`
+	ApprovalType string          `json:"approval_type"`
+	Status       string          `json:"status"`
+	ExpiredAt    string          `json:"expired_at"`
+	Target       *ApprovalTarget `json:"target,omitempty"`
+}
+
+// ApprovalTarget is a minimal, server-projected target description. It is not
+// a copy of the approval payload and intentionally omits requester, reason,
+// credentials, and arbitrary tool arguments.
+type ApprovalTarget struct {
+	Kind      string `json:"kind"`
+	DocID     string `json:"doc_id,omitempty"`
+	TargetKey string `json:"target_key,omitempty"`
 }
 
 // ApprovalDecisionReq submits an approval decision.

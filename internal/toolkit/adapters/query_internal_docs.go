@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"wisesentinel-platform/internal/domain"
+	"wisesentinel-platform/internal/pkg/ctxkeys"
 )
 
 // QueryInternalDocsInput is the input for query_internal_docs.
@@ -42,10 +43,14 @@ func QueryInternalDocs(ctx context.Context, input json.RawMessage) (string, erro
 	if err := json.Unmarshal(input, &req); err != nil {
 		return "", fmt.Errorf("invalid input: %w", err)
 	}
+	if req.Query == "" {
+		return "", fmt.Errorf("query is required")
+	}
 
 	resp, err := svc.Retrieve(ctx, &domain.RetrieveRequest{
-		Query: req.Query,
-		TopK:  3,
+		TenantID: ctxkeys.TenantIDFrom(ctx),
+		Query:    req.Query,
+		TopK:     3,
 	})
 	if err != nil {
 		return "", fmt.Errorf("retrieve failed: %w", err)

@@ -47,6 +47,14 @@ func (s *LocalStore) Read(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+// Remove deletes a stored document file and its empty directory.
+func (s *LocalStore) Remove(path string) error {
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	return os.Remove(filepath.Dir(path))
+}
+
 func validateFilename(name string) error {
 	name = filepath.Base(name)
 	if name == "" || name == "." || strings.Contains(name, "..") {

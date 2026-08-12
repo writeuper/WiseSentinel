@@ -1968,6 +1968,42 @@ Phase 1 核心后端能力（三条 Agent 链路 + Tool Gateway + RAG + 会话�
 
 ---
 
+## 18.5 企业级能力差距与设计修订基线
+
+### 18.5.1 能力完成度判定规则
+
+本设计将能力分为三种状态：
+
+- **已实现**：代码路径已闭环，且有接口或测试证据。
+- **部分实现**：存在数据结构、接口或局部逻辑，但关键闭环未完成。
+- **规划中**：文档已定义，但当前代码没有可运行实现。
+
+不得因为存在数据库表、种子数据或管理 API，就将运行时治理能力标记为“已实现”。
+
+### 18.5.2 当前关键差距
+
+| 领域 | 当前真实状态 | 详细设计修订要求 |
+|---|---|---|
+| Chat SSE | 后端有基础 SSE，Portal 仍用同步请求模拟打字；缺少 citation/tool_start/tool_end 和完整 Trace | 统一 SSE 事件协议，Portal 真实消费 SSE，事件与 Trace/ToolCallRecord 对齐 |
+| Ops Task | Submit/Execute 已解耦；重试退避、超时扫描、锁续租、审批恢复不完整 | 增加 `next_retry_at`、`timeout_at` 扫描、锁续租、取消、恢复执行状态机 |
+| Knowledge Index | DB + Redis IndexWorker 异步执行 | 明确异步为 Phase 1 基线；任务必须保存 visibility/secret_level 等完整元数据，并支持重试 |
+| Agent Trace | 自定义 MySQL Trace/Step | 保留业务回放表，新增 OTel Span；覆盖 Chat SSE、RAG、LLM、Tool、Ops step |
+| Tool Gateway | YAML 注册、风险、超时、调用记录和审批单 | 增加独立 JSON Schema、idempotency_key、dry-run、审批后恢复、结果验证和统一脱敏 |
+| ConfigOps | 激活 API 只改变数据库状态，Agent 仍使用代码/YAML | active config 必须进入 Chat/Ops/Tool 构建流程，并记录 config/prompt/model 版本 |
+| Tenant/RBAC | 有 tenant 过滤和路径级 RBAC | JWT tenant 与请求租户一致性、成员关系、资源级密级/服务/环境权限必须前置校验 |
+| Model/Cost | Profile 启动时加载，无 fallback/熔断/token/cost 闭环 | 引入模型路由策略、重试/熔断、token/cost、租户配额与 SLO |
+| Portal | Knowledge/Ops/Admin 等有接口；Chat SSE、索引状态和审批执行结果展示不完整 | 以真实 API/SSE 验收，不以 UI 原型或一次性查询作为完成标准 |
+
+### 18.5.3 依赖顺序
+
+```text
+任务可靠性与权限边界
+  -> Trace/ToolCall 统一记录
+  -> ConfigOps 运行时生效
+  -> RAG 分层与知识闭环
+  -> 模型治理、评估和自动处置
+```
+
 ## 附录 A：Ops 默认 Prompt（DB 种子数据）
 
 ```sql

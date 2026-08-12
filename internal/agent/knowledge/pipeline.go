@@ -11,7 +11,7 @@ import (
 	"github.com/cloudwego/eino/components/document"
 )
 
-// Pipeline orchestrates incremental delete and the Eino index graph.
+// Pipeline stages a document generation through the Eino index graph.
 type Pipeline struct {
 	graph   *IndexGraph
 	indexer *indexer.MilvusIndexer
@@ -26,7 +26,9 @@ func NewPipeline(ctx context.Context, store *storage.LocalStore, idx *indexer.Mi
 	return &Pipeline{graph: graph, indexer: idx}, nil
 }
 
-// IndexDocument deletes stale chunks then invokes the index graph.
+// IndexDocument writes only the requested staged generation. Publication and
+// cleanup are separate operations so a failed/reclaimed worker cannot remove a
+// currently active generation.
 func (p *Pipeline) IndexDocument(ctx context.Context, req *domain.IndexTaskRequest) (int, error) {
 	if req == nil {
 		return 0, fmt.Errorf("index request is nil")
@@ -34,16 +36,11 @@ func (p *Pipeline) IndexDocument(ctx context.Context, req *domain.IndexTaskReque
 	if req.SourceURI == "" {
 		return 0, fmt.Errorf("source uri is required")
 	}
-
-	if err := p.indexer.DeleteBySource(ctx, req.SourceURI); err != nil {
-		return 0, fmt.Errorf("delete old chunks: %w", err)
-	}
-	if req.DocID != "" {
-		if err := p.indexer.DeleteByDocID(ctx, req.DocID); err != nil {
-			return 0, fmt.Errorf("delete old doc chunks: %w", err)
-		}
+	if req.Generation == 0 || req.TaskID == "" {
+		return 0, fmt.Errorf("index generation and task ID are required")
 	}
 
 	ctx = WithIndexTask(ctx, req)
+	// 调用Index Graph，创建索引
 	return p.graph.Invoke(ctx, document.Source{URI: req.SourceURI})
 }

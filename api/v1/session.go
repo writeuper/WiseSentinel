@@ -45,8 +45,21 @@ type GetSessionMessagesReq struct {
 
 // GetSessionMessagesRes returns session message history.
 type GetSessionMessagesRes struct {
-	SessionID string          `json:"session_id"`
-	Messages  []MessageItem   `json:"messages"`
+	SessionID string        `json:"session_id"`
+	Messages  []MessageItem `json:"messages"`
+}
+
+// DeleteSessionReq deactivates one owned session and removes its short-term
+// Redis history. It is intentionally scoped to one session ID.
+type DeleteSessionReq struct {
+	g.Meta    `path:"/sessions/{session_id}" method:"delete" tags:"Session" summary:"删除会话"`
+	SessionID string `json:"session_id" in:"path" v:"required"`
+}
+
+// DeleteSessionRes confirms that the exact session was deactivated.
+type DeleteSessionRes struct {
+	SessionID string `json:"session_id"`
+	Status    string `json:"status"`
 }
 
 // MessageItem is a single chat message.

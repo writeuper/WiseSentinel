@@ -5,13 +5,14 @@ import {
   PlusOutlined,
   SafetyCertificateOutlined,
   SettingOutlined,
+  DeleteOutlined,
 } from '@ant-design/icons';
 import { Badge, Button, Drawer, Layout, Menu, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { sidebarTheme } from '@/theme/tokens';
-import { listSessions } from '@/api/client';
+import { listApprovals, listSessions } from '@/api/client';
 import type { SessionItem } from '@/api/types';
 import './AppLayout.css';
 
@@ -21,8 +22,10 @@ const navItems = [
   { key: '/chat', icon: <MessageOutlined />, label: '对话' },
   { key: '/ops', icon: <AlertOutlined />, label: '告警分析' },
   { key: '/knowledge', icon: <BookOutlined />, label: '知识库' },
-  { key: '/approvals', icon: <SafetyCertificateOutlined />, label: '审批中心', badge: 3 },
+  { key: '/fault-knowledge', icon: <BookOutlined />, label: '故障知识' },
+  { key: '/approvals', icon: <SafetyCertificateOutlined />, label: '审批中心' },
   { key: '/admin', icon: <SettingOutlined />, label: '管理' },
+  { key: '/vector-gc', icon: <DeleteOutlined />, label: '向量清理' },
 ];
 
 function SidebarContent({ collapsed }: { collapsed?: boolean }) {
@@ -30,6 +33,7 @@ function SidebarContent({ collapsed }: { collapsed?: boolean }) {
   const location = useLocation();
   const { username, tenantId, roles, hasRole, logout } = useAuth();
   const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState<number | undefined>();
 
   const loadSessions = useCallback(async () => {
     try {
@@ -40,11 +44,37 @@ function SidebarContent({ collapsed }: { collapsed?: boolean }) {
     }
   }, []);
 
+  const loadPendingApprovals = useCallback(async () => {
+    if (!hasRole(['sre_admin', 'platform_admin'])) {
+      setPendingApprovals(undefined);
+      return;
+    }
+    try {
+      const data = await listApprovals(1, 1);
+      setPendingApprovals(Math.max(0, data.total || 0));
+    } catch {
+      // A badge must never pretend there are pending approvals when the API
+      // is unavailable or the current identity cannot read the queue.
+      setPendingApprovals(undefined);
+    }
+  }, [hasRole]);
+
   useEffect(() => {
     if (location.pathname === '/chat') {
       loadSessions();
     }
   }, [location.pathname, loadSessions]);
+
+  useEffect(() => {
+    void loadPendingApprovals();
+    const refresh = () => void loadPendingApprovals();
+    window.addEventListener('focus', refresh);
+    const interval = window.setInterval(refresh, 30_000);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      window.clearInterval(interval);
+    };
+  }, [loadPendingApprovals]);
 
   const handleNewChat = () => {
     navigate('/chat');
@@ -64,8 +94,10 @@ function SidebarContent({ collapsed }: { collapsed?: boolean }) {
           case '/approvals':
             return hasRole(['sre_admin', 'platform_admin']);
           case '/admin':
+          case '/vector-gc':
             return hasRole(['sre_admin', 'platform_admin']);
           case '/knowledge':
+          case '/fault-knowledge':
             return true; // all authenticated users can browse
           case '/chat':
           default:
@@ -99,10 +131,10 @@ function SidebarContent({ collapsed }: { collapsed?: boolean }) {
         items={visibleNav.map((item) => ({
           key: item.key,
           icon: item.icon,
-          label: item.badge ? (
+          label: item.key === '/approvals' && pendingApprovals && pendingApprovals > 0 ? (
             <span className="nav-label-with-badge">
               {item.label}
-              <Badge count={item.badge} size="small" />
+              <Badge count={pendingApprovals} size="small" />
             </span>
           ) : (
             item.label

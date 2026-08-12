@@ -75,6 +75,15 @@ export default function ApprovalsPage() {
       { title: '任务 ID', dataIndex: 'task_id', key: 'task_id' },
       { title: '类型', dataIndex: 'approval_type', key: 'approval_type' },
       {
+        title: '受控目标', key: 'target', render: (_: unknown, row: ApprovalItem) => row.target?.kind === 'vector_gc_redrive' ? (
+          <Space direction="vertical" size={0}>
+            <Tag color="warning">向量 GC 重驱</Tag>
+            <Typography.Text code>{row.target.doc_id || '-'}</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontFamily: 'monospace' }}>{row.target.target_key || '-'}</Typography.Text>
+          </Space>
+        ) : <Typography.Text type="secondary">-</Typography.Text>,
+      },
+      {
         title: '状态',
         dataIndex: 'status',
         key: 'status',
@@ -157,6 +166,17 @@ export default function ApprovalsPage() {
         okButtonProps={decisionKind === 'rejected' ? { danger: true } : {}}
         destroyOnClose
       >
+		{decisionTarget?.target?.kind === 'vector_gc_redrive' && (
+		  <Typography.Paragraph type="warning">
+			批准后将仅重新入队此精确向量清理目标。请确认你不是申请人，并核对文档与 target key。
+		  </Typography.Paragraph>
+		)}
+		{decisionTarget?.target?.kind === 'vector_gc_redrive' && (
+		  <Typography.Paragraph>
+			<Typography.Text code>{decisionTarget.target.doc_id || '-'}</Typography.Text><br />
+			<Typography.Text type="secondary" style={{ fontFamily: 'monospace' }}>{decisionTarget.target.target_key || '-'}</Typography.Text>
+		  </Typography.Paragraph>
+		)}
         <Typography.Paragraph type="secondary">
           任务 ID: <span style={{ fontFamily: 'monospace' }}>{decisionTarget?.task_id}</span>
         </Typography.Paragraph>

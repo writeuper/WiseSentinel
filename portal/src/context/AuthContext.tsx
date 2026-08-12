@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { clearToken, getCurrentUser, isAuthenticated, login as apiLogin, setToken } from '@/api/client';
+import { ApiError, clearToken, getCurrentUser, isAuthenticated, login as apiLogin, setToken } from '@/api/client';
 import type { Role } from '@/api/types';
 
 interface AuthContextValue {
@@ -19,17 +19,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [authed, setAuthed] = useState(isAuthenticated());
   const [username, setUsername] = useState(() => localStorage.getItem('ws_username') || '');
   const [tenantId, setTenantId] = useState(() => localStorage.getItem('ws_tenant') || 'default');
-  const [roles, setRoles] = useState<Role[]>(() => {
-    try {
-      const raw = localStorage.getItem('ws_roles');
-      if (!raw) return ['operator'];
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return ['operator'];
-      return parsed as Role[];
-    } catch {
-      return ['operator'];
-    }
-  });
+  // Browser storage is not an authorization source. Roles become available
+  // only after the server confirms /me for the current token.
+  const [roles, setRoles] = useState<Role[]>([]);
 
   // Fetch identity from /me on mount to refresh roles / tenant.
   useEffect(() => {
@@ -51,8 +43,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUsername(data.username);
           localStorage.setItem('ws_username', data.username);
         }
-      } catch {
-        /* keep the cached roles if /me fails (e.g., expired token) */
+      } catch (err) {
+        if (cancelled) return;
+        setRoles([]);
+        localStorage.removeItem('ws_roles');
+        if (err instanceof ApiError && (err.httpStatus === 401 || err.httpStatus === 403)) {
+          clearToken();
+          localStorage.removeItem('ws_username');
+          localStorage.removeItem('ws_tenant');
+          setUsername('');
+          setTenantId('default');
+          setAuthed(false);
+        }
       }
     })();
     return () => {
@@ -76,8 +78,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setTenantId(me.tenant_id);
         localStorage.setItem('ws_tenant', me.tenant_id);
       }
-    } catch {
-      /* ignore */
+    } catch (err) {
+      // Do not leave a newly issued token in a privileged-looking browser
+      // state when the authoritative identity cannot be established.
+      clearToken();
+      localStorage.removeItem('ws_username');
+      localStorage.removeItem('ws_tenant');
+      localStorage.removeItem('ws_roles');
+      setUsername('');
+      setTenantId('default');
+      setRoles([]);
+      setAuthed(false);
+      throw err;
     }
   }, []);
 
@@ -88,7 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('ws_roles');
     setUsername('');
     setTenantId('default');
-    setRoles(['operator']);
+    setRoles([]);
     setAuthed(false);
   }, []);
 
@@ -104,8 +116,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setTenantId(me.tenant_id);
         localStorage.setItem('ws_tenant', me.tenant_id);
       }
-    } catch {
-      /* ignore */
+    } catch (err) {
+      setRoles([]);
+      localStorage.removeItem('ws_roles');
+      if (err instanceof ApiError && (err.httpStatus === 401 || err.httpStatus === 403)) {
+        clearToken();
+        localStorage.removeItem('ws_username');
+        localStorage.removeItem('ws_tenant');
+        setUsername('');
+        setTenantId('default');
+        setAuthed(false);
+      }
     }
   }, [authed]);
 

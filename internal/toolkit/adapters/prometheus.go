@@ -6,9 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
-
-	"wisesentinel-platform/internal/pkg/configx"
 )
 
 // PrometheusAlertsInput is the input for query_prometheus_alerts.
@@ -20,6 +19,8 @@ type PrometheusAlertsInput struct {
 type PrometheusAlertsOutput struct {
 	Alerts []PrometheusAlert `json:"alerts"`
 	Count  int               `json:"count"`
+	Source string            `json:"source"`
+	IsMock bool              `json:"is_mock"`
 }
 
 // PrometheusAlert is a simplified alert from Prometheus.
@@ -34,16 +35,20 @@ type PrometheusAlert struct {
 
 // QueryPrometheusAlerts fetches alerts from Prometheus API.
 func QueryPrometheusAlerts(ctx context.Context, input json.RawMessage) (string, error) {
-	baseURL := configx.String(ctx, "prometheus.base_url", "PROMETHEUS_URL")
+	baseURL, bearerToken := prometheusConfig(ctx)
+	if strings.EqualFold(baseURL, "local_mock") {
+		return localMockAlerts(), nil
+	}
 	if baseURL == "" {
 		baseURL = "http://127.0.0.1:9090"
 	}
 
-	url := baseURL + "/api/v1/alerts"
+	url := strings.TrimRight(baseURL, "/") + "/api/v1/alerts"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
+	setPrometheusAuth(req, bearerToken)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
@@ -51,18 +56,18 @@ func QueryPrometheusAlerts(ctx context.Context, input json.RawMessage) (string, 
 		return "", fmt.Errorf("prometheus request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return "", upstreamHTTPError("prometheus", resp)
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("read response: %w", err)
 	}
-	if resp.StatusCode >= 300 {
-		return "", fmt.Errorf("prometheus HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
 	// Parse standard Prometheus API response
 	var promResp struct {
 		Status string `json:"status"`
+		Error  string `json:"error,omitempty"`
 		Data   struct {
 			Alerts []struct {
 				Labels      map[string]string `json:"labels"`
@@ -75,10 +80,13 @@ func QueryPrometheusAlerts(ctx context.Context, input json.RawMessage) (string, 
 	if err := json.Unmarshal(body, &promResp); err != nil {
 		return "", fmt.Errorf("parse prometheus response: %w", err)
 	}
+	if promResp.Status != "success" {
+		return "", fmt.Errorf("prometheus query failed")
+	}
 
 	// Deduplicate by alertname, keep first
 	seen := make(map[string]bool)
-	output := PrometheusAlertsOutput{}
+	output := PrometheusAlertsOutput{Source: "prometheus"}
 	for _, a := range promResp.Data.Alerts {
 		name := a.Labels["alertname"]
 		if name == "" || seen[name] {

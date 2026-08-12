@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"wisesentinel-platform/internal/pkg/configx"
@@ -44,10 +45,16 @@ func LoadConfig(ctx context.Context) Config {
 	}
 	cfg := Config{
 		Address:    address,
-		DBName:     g.Cfg().MustGet(ctx, "milvus.db", defaultDB).String(),
-		Collection: g.Cfg().MustGet(ctx, "milvus.collection", defaultCollection).String(),
+		DBName:     configx.String(ctx, "milvus.db", "MILVUS_DB"),
+		Collection: configx.String(ctx, "milvus.collection", "MILVUS_COLLECTION"),
 		Username:   g.Cfg().MustGet(ctx, "milvus.username", "").String(),
 		Password:   g.Cfg().MustGet(ctx, "milvus.password", "").String(),
+	}
+	if cfg.DBName == "" {
+		cfg.DBName = defaultDB
+	}
+	if cfg.Collection == "" {
+		cfg.Collection = defaultCollection
 	}
 	return cfg
 }
@@ -193,6 +200,33 @@ func (m *MilvusClient) Ping(ctx context.Context) error {
 	}
 	_, err := m.client.ListCollections(ctx)
 	return err
+}
+
+// PhysicalVectorCount returns the configured collection's complete physical
+// row count. This is deliberately not tenant-scoped and includes vectors that
+// may be legacy, superseded or pending GC; callers must present it separately
+// from logical active chunks.
+func (m *MilvusClient) PhysicalVectorCount(ctx context.Context) (int, error) {
+	if m == nil || m.client == nil {
+		return 0, fmt.Errorf("milvus client is nil")
+	}
+	statistics, err := m.client.GetCollectionStatistics(ctx, m.collection)
+	if err != nil {
+		return 0, err
+	}
+	return parsePhysicalVectorCount(statistics)
+}
+
+func parsePhysicalVectorCount(statistics map[string]string) (int, error) {
+	value, ok := statistics["row_count"]
+	if !ok || value == "" {
+		return 0, fmt.Errorf("milvus row_count is missing")
+	}
+	count, err := strconv.ParseUint(value, 10, 63)
+	if err != nil {
+		return 0, fmt.Errorf("parse milvus row_count: %w", err)
+	}
+	return int(count), nil
 }
 
 // Close releases the Milvus connection.

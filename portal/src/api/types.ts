@@ -26,6 +26,12 @@ export interface UploadDocumentData {
   status: string;
 }
 
+export interface ReindexDocumentData {
+  doc_id: string;
+  task_id: string;
+  status: string;
+}
+
 export interface IndexTaskData {
   task_id: string;
   doc_id: string;
@@ -91,6 +97,13 @@ export interface ApprovalItem {
   approval_type: string;
   status: string;
   expired_at: string;
+	 target?: ApprovalTarget;
+}
+
+export interface ApprovalTarget {
+	 kind: string;
+	 doc_id?: string;
+	 target_key?: string;
 }
 
 export interface AgentConfigItem {
@@ -106,6 +119,39 @@ export interface OpsAnalyzeData {
   result: string;
   detail: string[];
   trace_id: string;
+  evidence?: OpsEvidence[];
+  conclusion?: OpsFaultConclusion;
+  timing?: OpsTiming;
+}
+
+export interface OpsTiming {
+  queue_duration_ms: number;
+  run_duration_ms: number;
+  e2e_duration_ms: number;
+  created_at?: string;
+  started_at?: string;
+  finished_at?: string;
+}
+
+export interface OpsEvidence {
+  tool_name: string;
+  source?: string;
+  status: string;
+  latency_ms?: number;
+  timestamp?: string;
+  suppressed: boolean;
+  input_bytes?: number;
+  output_bytes?: number;
+}
+
+export interface OpsFaultConclusion {
+  symptom: string;
+  impact: string;
+  root_cause: string;
+  workaround: string;
+  remediation: string;
+  confidence: string;
+  source: string;
 }
 
 export interface OpsTaskData {
@@ -113,6 +159,41 @@ export interface OpsTaskData {
   status: string;
   result: string;
   detail: string[];
+  evidence?: OpsEvidence[];
+  conclusion?: OpsFaultConclusion;
+  timing?: OpsTiming;
+}
+
+export interface AgentTraceData {
+  trace: AgentTrace;
+  steps: AgentTraceStep[];
+}
+
+export interface AgentTrace {
+  trace_id: string;
+  tenant_id: string;
+  user_id: string;
+  agent_type: string;
+  session_id?: string;
+  task_id?: string;
+  query: string;
+  status: string;
+  latency_ms: number;
+  error_msg?: string;
+  started_at?: string;
+  finished_at?: string;
+}
+
+export interface AgentTraceStep {
+  id: number;
+  step_type: string;
+  step_name: string;
+  input_summary?: string;
+  output_summary?: string;
+  status: string;
+  latency_ms: number;
+  error_msg?: string;
+  created_at?: string;
 }
 
 // M5 user identity (parsed from JWT).
@@ -129,6 +210,36 @@ export interface ListOpsTasksData {
   total: number;
 }
 
+export interface FaultKnowledgeItem {
+  card_id: string;
+  task_id: string;
+  trace_id: string;
+  title: string;
+  symptom: string;
+  impact: string;
+  root_cause: string;
+  workaround: string;
+  remediation: string;
+  service: string;
+  version: string;
+  status: string;
+  weight: number;
+  doc_id: string;
+  hit_count: number;
+  useful_count: number;
+  bad_count: number;
+  created_by: string;
+  reviewed_by: string;
+  created_at: string;
+  updated_at: string;
+  reviewed_at?: string;
+}
+
+export interface ListFaultKnowledgeData {
+  items: FaultKnowledgeItem[];
+  total: number;
+}
+
 export interface OpsTaskSummary {
   task_id: string;
   status: string;
@@ -139,4 +250,23 @@ export interface OpsTaskSummary {
 export interface GetSessionMessagesData {
   session_id: string;
   messages: MessageItem[];
+}
+
+export type VectorGCTaskStatus = 'pending' | 'running' | 'retry_wait' | 'succeeded' | 'skipped' | 'dead';
+
+export interface VectorGCTaskItem {
+	  doc_id: string;
+	  target_key: string;
+	  target_kind: string;
+	  target_generation: number;
+	  status: VectorGCTaskStatus;
+	  attempt_count: number;
+	  max_attempts: number;
+	  last_error?: string;
+	  next_attempt_at?: string;
+}
+
+export interface ListVectorGCTasksData {
+	  items: VectorGCTaskItem[];
+	  total: number;
 }

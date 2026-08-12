@@ -11,7 +11,6 @@ import (
 	"github.com/cloudwego/eino/components/model"
 )
 
-
 // NewReplanner creates the Replanner agent for Ops.
 //
 // The Replanner uses the ops_plan (think) model and decides whether
@@ -27,6 +26,6 @@ func NewReplanner(ctx context.Context, modelRouter domain.ModelRouter) (adk.Agen
 		return nil, fmt.Errorf("ops_plan model does not implement model.ToolCallingChatModel")
 	}
 	return planexecute.NewReplanner(ctx, &planexecute.ReplannerConfig{
-		ChatModel: replanModel,
+		ChatModel: newForceToolModel(replanModel),
 	})
 }

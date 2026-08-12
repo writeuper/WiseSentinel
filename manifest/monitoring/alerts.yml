@@ -1,0 +1,56 @@
+groups:
+  - name: wisesentinel-platform
+    rules:
+      - alert: WiseSentinelPlatformDown
+        expr: up{job="wisesentinel-platform"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: WiseSentinel platform is down
+          description: Prometheus cannot scrape the WiseSentinel platform for more than 2 minutes.
+
+      - alert: WiseSentinelHighHttpErrorRate
+        expr: |
+          sum(rate(ws_http_requests_total{job="wisesentinel-platform",code=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(ws_http_requests_total{job="wisesentinel-platform"}[5m])), 1)
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: WiseSentinel HTTP 5xx error rate is high
+          description: HTTP 5xx responses exceed 5% of requests for more than 5 minutes.
+
+      - alert: WiseSentinelHighHttpLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(ws_http_request_duration_seconds_bucket{job="wisesentinel-platform"}[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: WiseSentinel HTTP p95 latency is high
+          description: HTTP p95 latency is above 1 second for more than 10 minutes.
+
+      - alert: WiseSentinelRAGVectorGCDeadLetter
+        expr: ws_rag_vector_gc_tasks{status="dead"} > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: rag
+        annotations:
+          summary: WiseSentinel RAG vector-GC has dead-letter tasks
+          description: At least one vector cleanup task exhausted its retry budget. Inspect the tenant-scoped Vector GC administration queue and use the approval-controlled redrive flow.
+
+      - alert: WiseSentinelRAGVectorGCRetryBacklog
+        expr: ws_rag_vector_gc_tasks{status="retry_wait"} > 20
+        for: 15m
+        labels:
+          severity: warning
+          component: rag
+        annotations:
+          summary: WiseSentinel RAG vector-GC retry backlog is elevated
+          description: More than 20 cleanup tasks are waiting for retry for 15 minutes. Check Milvus availability and cleanup worker health.

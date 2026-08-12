@@ -1,10 +1,13 @@
 package middleware
 
 import (
+	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"wisesentinel-platform/internal/pkg/apperr"
+	"wisesentinel-platform/internal/pkg/redact"
 	"wisesentinel-platform/internal/pkg/response"
 
 	"github.com/gogf/gf/v2/net/ghttp"
@@ -19,7 +22,8 @@ func UnifiedResponse(r *ghttp.Request) {
 	}
 
 	path := r.URL.Path
-	if strings.HasPrefix(path, "/health") || path == "/metrics" {
+	contentType := r.Response.Header().Get("Content-Type")
+	if strings.HasPrefix(path, "/health") || path == "/metrics" || strings.HasPrefix(contentType, "text/event-stream") {
 		return
 	}
 
@@ -34,13 +38,28 @@ func UnifiedResponse(r *ghttp.Request) {
 }
 
 func writeHandlerError(r *ghttp.Request, err error) {
-	if ae, ok := err.(*apperr.AppError); ok {
+	var ae *apperr.AppError
+	if errors.As(err, &ae) {
 		r.Response.Status = ae.HTTP
+		if seconds := retryAfterSeconds(ae.Code); seconds > 0 {
+			r.Response.Header().Set("Retry-After", strconv.Itoa(seconds))
+		}
 		r.Response.WriteJson(response.Fail(ae.Code, ae.Message))
 		return
 	}
 	r.Response.Status = http.StatusInternalServerError
-	r.Response.WriteJson(response.Fail(apperr.ErrInternal.Code, err.Error()))
+	// Unknown errors can carry provider response bodies. Never echo those raw
+	// values to an API client; retain only a redacted diagnostic projection.
+	r.Response.WriteJson(response.Fail(apperr.ErrInternal.Code, redact.Summary(err.Error(), 1000)))
+}
+
+// retryAfterSeconds exposes a bounded retry hint only for errors that are
+// explicitly safe to retry. It must not be inferred for write/approval paths.
+func retryAfterSeconds(code int) int {
+	if code == apperr.ErrModelOverloaded.Code {
+		return 2
+	}
+	return 0
 }
 
 func writeError(r *ghttp.Request, ae *apperr.AppError) {

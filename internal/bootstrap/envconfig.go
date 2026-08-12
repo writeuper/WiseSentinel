@@ -13,10 +13,7 @@ import (
 )
 
 // dotEnvPaths lists candidate .env file locations to search.
-var dotEnvPaths = []string{
-	".env",
-	"/home/ubuntu/WiseSentinel/.env",
-}
+var dotEnvPaths = []string{".env"}
 
 // loadDotEnv reads a .env file and sets each KEY=VALUE as an environment variable.
 // Existing env vars are NOT overwritten.

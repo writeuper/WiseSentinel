@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"wisesentinel-platform/internal/domain"
 	"wisesentinel-platform/internal/pkg/ctxkeys"
 	"wisesentinel-platform/internal/toolkit"
+
+	"github.com/cloudwego/eino/components/tool"
 )
 
 func TestMain(m *testing.M) {
@@ -104,8 +107,9 @@ func TestGatewayInvokeL0ForViewer(t *testing.T) {
 }
 
 func TestGatewayInvokeInternalDocsWithNoRAG(t *testing.T) {
-	// query_internal_docs has no RAG service wired in test, so it should
-	// still return success (will just have no results).
+	// query_internal_docs must not be exposed until bootstrap has a usable RAG
+	// pipeline. Otherwise a model can select a known-unavailable tool and turn
+	// an infrastructure degradation into a Chat failure.
 	ctx := ctxWithRoles(context.Background(), "operator")
 	gw := toolkit.NewGateway(ctx)
 
@@ -113,11 +117,66 @@ func TestGatewayInvokeInternalDocsWithNoRAG(t *testing.T) {
 		ToolName: "query_internal_docs",
 		Input:    json.RawMessage(`{"query":"test"}`),
 	})
+	if err == nil {
+		t.Fatal("expected unavailable-tool error")
+	}
+	if resp != nil {
+		t.Fatalf("expected no tool response for an unadvertised adapter, got %#v", resp)
+	}
+}
+
+func TestOpsAgentSearchLogsToolCallFlow(t *testing.T) {
+	var evidence []domain.Evidence
+	var steps []string
+	ctx := ctxWithRoles(context.Background(), "operator")
+	ctx = ctxkeys.WithToolSink(ctx, &evidence)
+	ctx = ctxkeys.WithStepSink(ctx, func(stepType, stepName, input, output, status string, latencyMS int64, errMsg string) {
+		steps = append(steps, stepType+":"+stepName+":"+status)
+	})
+
+	gw := toolkit.NewGateway(ctx)
+	einoTools, err := gw.AsEinoTools(ctx, "default", domain.AgentTypeOps)
 	if err != nil {
-		t.Fatalf("Invoke query_internal_docs failed: %v", err)
+		t.Fatalf("AsEinoTools failed: %v", err)
 	}
-	if resp.Status == "" {
-		t.Fatal("expected non-empty status")
+
+	var searchLogs tool.InvokableTool
+	for _, item := range einoTools {
+		info, err := item.Info(ctx)
+		if err != nil {
+			t.Fatalf("tool Info failed: %v", err)
+		}
+		if info.Name == "search_logs" {
+			invokable, ok := item.(tool.InvokableTool)
+			if !ok {
+				t.Fatal("search_logs should implement tool.InvokableTool")
+			}
+			searchLogs = invokable
+			break
+		}
 	}
-	t.Logf("query_internal_docs result: status=%s, output=%s", resp.Status, resp.Output)
+	if searchLogs == nil {
+		t.Fatal("search_logs not found in ops Eino tools")
+	}
+
+	output, err := searchLogs.InvokableRun(ctx, `{"query":"mysql deadlock","service":"order-service","level":"ERROR","limit":3}`)
+	if err != nil {
+		t.Fatalf("search_logs InvokableRun failed: %v", err)
+	}
+	if !strings.Contains(output, "mysql deadlock detected") {
+		t.Fatalf("expected mock log in output, got: %s", output)
+	}
+
+	if len(evidence) != 1 {
+		t.Fatalf("expected one evidence record, got %d", len(evidence))
+	}
+	if evidence[0].ToolName != "search_logs" || evidence[0].Status != "success" {
+		t.Fatalf("unexpected evidence: %+v", evidence[0])
+	}
+	if !strings.Contains(evidence[0].Output, `"suppressed":true`) {
+		t.Fatalf("expected fail-closed evidence projection, got: %s", evidence[0].Output)
+	}
+	if len(steps) != 1 || !strings.Contains(steps[0], "tool:search_logs:success") {
+		t.Fatalf("expected one successful tool step, got: %+v", steps)
+	}
 }

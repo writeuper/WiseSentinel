@@ -28,6 +28,21 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    image: mysql:8.0
+    container_name: wisesentinel-migrate
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_PWD: ws123
+    volumes:
+      - ../sql/migrations:/migrations:ro
+      - ./migrate.sh:/usr/local/bin/migrate:ro
+    entrypoint:
+      - /bin/sh
+      - /usr/local/bin/migrate
+
   etcd:
     container_name: milvus-etcd
     image: quay.io/coreos/etcd:v3.5.18
@@ -111,9 +126,12 @@ services:
       MYSQL_DSN: "mysql:ws:ws123@tcp(mysql:3306)/wisesentinel?charset=utf8mb4&parseTime=True&loc=Local"
       REDIS_ADDRESS: "redis:6379"
       MILVUS_ADDRESS: "milvus:19530"
+      PROMETHEUS_URL: "http://prometheus:9090"
     depends_on:
       mysql:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       milvus:
@@ -121,6 +139,32 @@ services:
     volumes:
       - ../../manifest/config/config.yaml:/app/config/config.yaml:ro
 
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: wisesentinel-prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9090/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
 networks:
   default:
     name: wisesentinel
+
+volumes:
+  prometheus-data:
+    name: wisesentinel-prometheus-data

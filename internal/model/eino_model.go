@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,8 +13,13 @@ import (
 	"sync"
 	"time"
 
+	"wisesentinel-platform/internal/observability"
+	"wisesentinel-platform/internal/pkg/apperr"
+	"wisesentinel-platform/internal/pkg/redact"
+
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
+	"github.com/gogf/gf/v2/frame/g"
 )
 
 // OpenAIEinoModel implements model.ToolCallingChatModel and model.ChatModel
@@ -28,11 +34,18 @@ type OpenAIEinoModel struct {
 	baseURL  string
 	timeout  time.Duration
 	tools    []*schema.ToolInfo
+	state    *modelRuntimeState
+}
 
-	// circuit breaker state
+// modelRuntimeState is shared by every bound copy of one model profile. Tool
+// binding is request-specific, while provider health and admission must be
+// profile-scoped; otherwise a freshly constructed model bypasses both.
+type modelRuntimeState struct {
+	mu             sync.RWMutex
 	failureCount   int
 	lastFailureAt  time.Time
 	breakerTripped bool
+	admission      chan struct{}
 }
 
 const (
@@ -44,14 +57,71 @@ const (
 
 // NewOpenAIEinoModel creates a new Eino-compatible chat model.
 func NewOpenAIEinoModel(provider, modelName, apiKey, baseURL string, timeout time.Duration) *OpenAIEinoModel {
+	return NewOpenAIEinoModelWithAdmission(provider, modelName, apiKey, baseURL, timeout, 0)
+}
+
+// NewOpenAIEinoModelWithAdmission creates a model with a non-blocking,
+// bounded provider admission limit. A value <= 0 disables local admission.
+func NewOpenAIEinoModelWithAdmission(provider, modelName, apiKey, baseURL string, timeout time.Duration, maxConcurrent int) *OpenAIEinoModel {
+	return newOpenAIEinoModel(provider, modelName, apiKey, baseURL, timeout, newModelRuntimeState(maxConcurrent))
+}
+
+func newModelRuntimeState(maxConcurrent int) *modelRuntimeState {
+	state := &modelRuntimeState{}
+	if maxConcurrent > 0 {
+		state.admission = make(chan struct{}, maxConcurrent)
+	}
+	return state
+}
+
+func newOpenAIEinoModel(provider, modelName, apiKey, baseURL string, timeout time.Duration, state *modelRuntimeState) *OpenAIEinoModel {
 	baseURL = strings.TrimRight(baseURL, "/\"' ")
+	if state == nil {
+		state = newModelRuntimeState(0)
+	}
 	return &OpenAIEinoModel{
 		provider: provider,
 		model:    modelName,
 		apiKey:   apiKey,
 		baseURL:  baseURL,
 		timeout:  timeout,
+		state:    state,
 	}
+}
+
+func (m *OpenAIEinoModel) acquire(ctx context.Context) (func(), error) {
+	started := time.Now()
+	if m.state == nil || m.state.admission == nil {
+		observability.ObserveModelAdmissionWait(m.provider, "accepted", time.Since(started).Seconds())
+		return func() {}, nil
+	}
+	select {
+	case m.state.admission <- struct{}{}:
+		observability.ObserveModelAdmissionWait(m.provider, "accepted", time.Since(started).Seconds())
+		observeRelease := observability.ObserveModelAdmission(m.provider, true)
+		return func() {
+			<-m.state.admission
+			observeRelease()
+		}, nil
+	case <-ctx.Done():
+		observability.ObserveModelAdmissionWait(m.provider, "canceled", time.Since(started).Seconds())
+		return nil, ctx.Err()
+	default:
+		observability.ObserveModelAdmissionWait(m.provider, "rejected", time.Since(started).Seconds())
+		observability.ObserveModelAdmission(m.provider, false)
+		return nil, apperr.ErrModelOverloaded
+	}
+}
+
+func modelHTTPError(resp *http.Response) error {
+	requestID := redact.Summary(resp.Header.Get("X-Request-ID"), 128)
+	if requestID == "" {
+		requestID = redact.Summary(resp.Header.Get("X-Request-Id"), 128)
+	}
+	if requestID == "" {
+		return fmt.Errorf("LLM HTTP %d", resp.StatusCode)
+	}
+	return fmt.Errorf("LLM HTTP %d request_id=%s", resp.StatusCode, requestID)
 }
 
 // chatCompletionURL returns the full URL for the chat completions endpoint.
@@ -88,7 +158,26 @@ func hasAPIVersion(u string) bool {
 }
 
 // Generate sends a non-streaming chat completion request with retry and circuit breaker.
-func (m *OpenAIEinoModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+func (m *OpenAIEinoModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (result *schema.Message, retErr error) {
+	release, err := m.acquire(ctx)
+	if err != nil {
+		observability.ObserveModelCall(m.provider, "generate", modelCallOutcome(err), 0)
+		return nil, err
+	}
+	defer release()
+	executionStarted := time.Now()
+	defer func() {
+		observability.ObserveModelCall(m.provider, "generate", modelCallOutcome(retErr), time.Since(executionStarted).Seconds())
+	}()
+	// The profile timeout is a budget for the whole logical generation,
+	// including retries and backoff. Without this parent deadline every retry
+	// could consume a full upstream timeout and let a user request outlive its
+	// intended SLO by several multiples.
+	if m.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, m.timeout)
+		defer cancel()
+	}
 	// Check circuit breaker
 	if err := m.checkBreaker(); err != nil {
 		return nil, err
@@ -144,15 +233,14 @@ func (m *OpenAIEinoModel) doGenerate(ctx context.Context, input []*schema.Messag
 		return nil, fmt.Errorf("LLM request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, modelHTTPError(resp)
+	}
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, string(respBody))
-	}
-
 	var chatResp struct {
 		Choices []struct {
 			Message struct {
@@ -172,6 +260,11 @@ func (m *OpenAIEinoModel) doGenerate(ctx context.Context, input []*schema.Messag
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
+	toolCallCount := 0
+	for _, choice := range chatResp.Choices {
+		toolCallCount += len(choice.Message.ToolCalls)
+	}
+	g.Log().Debugf(ctx, "[model-debug] response model=%s status=%d choices=%d tool_calls=%d", m.model, resp.StatusCode, len(chatResp.Choices), toolCallCount)
 	if len(chatResp.Choices) == 0 {
 		return nil, fmt.Errorf("LLM returned no choices")
 	}
@@ -211,48 +304,99 @@ func (m *OpenAIEinoModel) doGenerate(ctx context.Context, input []*schema.Messag
 }
 
 // Stream sends a streaming chat completion request.
-func (m *OpenAIEinoModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+func (m *OpenAIEinoModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (result *schema.StreamReader[*schema.Message], retErr error) {
+	streamCtx := ctx
+	var cancel context.CancelFunc
+	if m.timeout > 0 {
+		streamCtx, cancel = context.WithTimeout(ctx, m.timeout)
+	}
+	executionStarted := time.Now()
+	defer func() {
+		observability.ObserveModelCall(m.provider, "stream_handshake", modelCallOutcome(retErr), time.Since(executionStarted).Seconds())
+	}()
+	release, err := m.acquire(streamCtx)
+	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		return nil, err
+	}
 	options := model.GetCommonOptions(nil, opts...)
 
 	reqBody := m.buildRequest(input, options, true)
 	body, _ := json.Marshal(reqBody)
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost,
 		m.chatCompletionURL(), bytes.NewReader(body))
 	if err != nil {
+		release()
+		if cancel != nil {
+			cancel()
+		}
 		return nil, fmt.Errorf("create stream request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+m.apiKey)
 	httpReq.Header.Set("Accept", "text/event-stream")
 
-	client := &http.Client{Timeout: 5 * time.Minute}
+	// streamCtx owns the complete profile budget (handshake plus body). A
+	// separate five-minute client timeout would let streaming bypass the
+	// profile SLO and exhaust an admission slot long after sync calls stop.
+	client := &http.Client{}
 	resp, err := client.Do(httpReq)
 	if err != nil {
+		release()
+		if cancel != nil {
+			cancel()
+		}
 		return nil, fmt.Errorf("LLM stream request failed: %w", err)
 	}
 	if resp.StatusCode >= 400 {
-		errBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("LLM HTTP %d: %s", resp.StatusCode, string(errBody))
+		release()
+		if cancel != nil {
+			cancel()
+		}
+		return nil, modelHTTPError(resp)
 	}
 
 	sr, ws := schema.Pipe[*schema.Message](0)
 
 	go func() {
+		streamStarted := time.Now()
+		streamErr := error(nil)
+		defer func() {
+			observability.ObserveModelCall(m.provider, "stream_complete", modelCallOutcome(streamErr), time.Since(streamStarted).Seconds())
+		}()
 		defer resp.Body.Close()
+		defer release()
+		if cancel != nil {
+			defer cancel()
+		}
 		defer ws.Close()
 
 		// Accumulator for streaming chunks
 		fullContent := strings.Builder{}
 		var toolCalls []schema.ToolCall
-		scanner := bufio.NewScanner(resp.Body)
-		for scanner.Scan() {
-			line := scanner.Text()
+		reader := bufio.NewReader(resp.Body)
+		for {
+			line, readErr := reader.ReadString('\n')
+			if readErr != nil && readErr != io.EOF {
+				streamErr = fmt.Errorf("read stream response: %w", readErr)
+				ws.Send(nil, streamErr)
+				return
+			}
+			line = strings.TrimRight(line, "\r\n")
 			if line == "" {
+				if readErr == io.EOF {
+					break
+				}
 				continue
 			}
 			if !strings.HasPrefix(line, "data: ") {
+				if readErr == io.EOF {
+					break
+				}
 				continue
 			}
 			data := strings.TrimPrefix(line, "data: ")
@@ -300,9 +444,31 @@ func (m *OpenAIEinoModel) Stream(ctx context.Context, input []*schema.Message, o
 				}
 			}
 		}
+		if len(toolCalls) > 0 {
+			ws.Send(&schema.Message{
+				Role:      schema.Assistant,
+				Content:   fullContent.String(),
+				ToolCalls: toolCalls,
+			}, nil)
+		}
 	}()
 
 	return sr, nil
+}
+
+func modelCallOutcome(err error) string {
+	switch {
+	case err == nil:
+		return "success"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, apperr.ErrModelOverloaded):
+		return "overloaded"
+	default:
+		return "upstream_error"
+	}
 }
 
 // WithTools returns a new OpenAIEinoModel with the given tools bound.
@@ -314,6 +480,7 @@ func (m *OpenAIEinoModel) WithTools(tools []*schema.ToolInfo) (model.ToolCalling
 		baseURL:  m.baseURL,
 		timeout:  m.timeout,
 		tools:    tools,
+		state:    m.state,
 	}
 	return newModel, nil
 }
@@ -327,6 +494,11 @@ func (m *OpenAIEinoModel) BindTools(tools []*schema.ToolInfo) error {
 }
 
 // buildRequest constructs the OpenAI-compatible request body.
+func isThinkingToolChoiceProvider(provider, baseURL, modelName string) bool {
+	text := strings.ToLower(provider + " " + baseURL + " " + modelName)
+	return strings.Contains(text, "ark") || strings.Contains(text, "volces") || strings.Contains(text, "deepseek")
+}
+
 func (m *OpenAIEinoModel) buildRequest(input []*schema.Message, opts *model.Options, stream bool) map[string]interface{} {
 	req := map[string]interface{}{
 		"model":  m.model,
@@ -383,8 +555,19 @@ func (m *OpenAIEinoModel) buildRequest(input []*schema.Message, opts *model.Opti
 		if len(tools) > 0 {
 			req["tools"] = convertToolsToOpenAI(tools)
 		}
-		if opts.ToolChoice != nil {
-			req["tool_choice"] = string(*opts.ToolChoice)
+		if opts.ToolChoice != nil && len(tools) > 0 {
+			// Normalize tool_choice for OpenAI-compatible providers that do not
+			// support Eino's "forced" value. "forced" semantically maps to
+			// "required" (the model must call at least one tool). A required
+			// choice without tools is invalid, so omit it when no tools are bound.
+			choice := string(*opts.ToolChoice)
+			if strings.EqualFold(choice, "forced") || strings.EqualFold(choice, "function") {
+				choice = "required"
+			}
+			req["tool_choice"] = choice
+			if strings.EqualFold(choice, "required") && isThinkingToolChoiceProvider(m.provider, m.baseURL, m.model) {
+				req["thinking"] = map[string]string{"type": "disabled"}
+			}
 		}
 	} else if len(m.tools) > 0 {
 		req["tools"] = convertToolsToOpenAI(m.tools)
@@ -440,10 +623,11 @@ func convertToolsToOpenAI(tools []*schema.ToolInfo) []map[string]interface{} {
 // reset yet. If the breaker has been tripped for longer than breakerResetTime,
 // it allows a single probe request (half-open state).
 func (m *OpenAIEinoModel) checkBreaker() error {
-	m.mu.RLock()
-	tripped := m.breakerTripped
-	lastFailure := m.lastFailureAt
-	m.mu.RUnlock()
+	state := m.runtimeState()
+	state.mu.RLock()
+	tripped := state.breakerTripped
+	lastFailure := state.lastFailureAt
+	state.mu.RUnlock()
 
 	if !tripped {
 		return nil
@@ -451,10 +635,10 @@ func (m *OpenAIEinoModel) checkBreaker() error {
 
 	// Half-open: allow a probe after the reset window
 	if time.Since(lastFailure) > breakerResetTime {
-		m.mu.Lock()
-		m.breakerTripped = false
-		m.failureCount = 0
-		m.mu.Unlock()
+		state.mu.Lock()
+		state.breakerTripped = false
+		state.failureCount = 0
+		state.mu.Unlock()
 		return nil
 	}
 
@@ -464,22 +648,37 @@ func (m *OpenAIEinoModel) checkBreaker() error {
 
 // recordSuccess resets the failure count on a successful call.
 func (m *OpenAIEinoModel) recordSuccess() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.failureCount = 0
-	m.breakerTripped = false
+	state := m.runtimeState()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.failureCount = 0
+	state.breakerTripped = false
 }
 
 // recordFailure increments the failure count and trips the breaker if
 // the threshold is reached.
 func (m *OpenAIEinoModel) recordFailure() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.failureCount++
-	m.lastFailureAt = time.Now()
-	if m.failureCount >= breakerThreshold {
-		m.breakerTripped = true
+	state := m.runtimeState()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.failureCount++
+	state.lastFailureAt = time.Now()
+	if state.failureCount >= breakerThreshold {
+		state.breakerTripped = true
 	}
+}
+
+func (m *OpenAIEinoModel) runtimeState() *modelRuntimeState {
+	if m.state == nil {
+		// Legacy instances are only possible in package-local tests. Keep their
+		// state usable rather than panicking; production constructors always set it.
+		m.mu.Lock()
+		if m.state == nil {
+			m.state = &modelRuntimeState{}
+		}
+		m.mu.Unlock()
+	}
+	return m.state
 }
 
 // isRetryableError returns true if the error is likely transient

@@ -11,12 +11,13 @@ import (
 	"wisesentinel-platform/internal/domain"
 	"wisesentinel-platform/internal/pkg/apperr"
 	"wisesentinel-platform/internal/pkg/ctxkeys"
+	"wisesentinel-platform/internal/pkg/redact"
 	"wisesentinel-platform/internal/repository"
 	"wisesentinel-platform/internal/toolkit/adapters"
+	mcpadapter "wisesentinel-platform/internal/toolkit/mcp"
 
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/util/gconv"
-	"github.com/google/uuid"
 )
 
 // AdapterFunc is the signature for a tool adapter.
@@ -24,10 +25,10 @@ type AdapterFunc func(ctx context.Context, input json.RawMessage) (string, error
 
 // Gateway implements domain.ToolGateway.
 type Gateway struct {
-	mu           sync.RWMutex
-	tools        map[string]*domain.ToolMeta
-	adapters     map[string]AdapterFunc
-	approvalRepo *repository.ApprovalRepo
+	mu         sync.RWMutex
+	tools      map[string]*domain.ToolMeta
+	adapters   map[string]AdapterFunc
+	recordRepo *repository.ToolCallRecordRepo
 }
 
 // NewGateway creates a ToolGateway from config and registered adapters.
@@ -43,11 +44,10 @@ func NewGateway(ctx context.Context) *Gateway {
 	return gw
 }
 
-// SetApprovalRepo wires the approval repository into the gateway.
-func (gw *Gateway) SetApprovalRepo(repo *repository.ApprovalRepo) {
+func (gw *Gateway) SetToolCallRecordRepo(repo *repository.ToolCallRecordRepo) {
 	gw.mu.Lock()
 	defer gw.mu.Unlock()
-	gw.approvalRepo = repo
+	gw.recordRepo = repo
 }
 
 func (gw *Gateway) loadToolConfig(ctx context.Context) {
@@ -94,11 +94,34 @@ func (gw *Gateway) loadToolConfig(ctx context.Context) {
 	}
 }
 
+func (gw *Gateway) SetMCPTimeAdapter(adapter *mcpadapter.TimeAdapter) {
+	if adapter == nil {
+		return
+	}
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	gw.adapters["mcp_time_get_current_time"] = adapter.GetCurrentTime
+	gw.adapters["mcp_time_convert_time"] = adapter.ConvertTime
+}
+
+// EnableInternalDocsAdapter exposes knowledge retrieval only after bootstrap
+// has created a usable RAG pipeline. Keeping an unavailable dependency in the
+// model tool list causes tool-selection failures to become user-visible Chat
+// 500s instead of an explicit degraded capability.
+func (gw *Gateway) EnableInternalDocsAdapter() {
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	gw.adapters["query_internal_docs"] = adapters.QueryInternalDocs
+}
+
 func (gw *Gateway) registerAdapters() {
 	gw.adapters["query_prometheus_alerts"] = adapters.QueryPrometheusAlerts
-	gw.adapters["query_internal_docs"] = adapters.QueryInternalDocs
+	gw.adapters["query_metric_range"] = adapters.QueryMetricRange
 	gw.adapters["get_current_time"] = adapters.GetCurrentTime
 	gw.adapters["query_logs"] = adapters.NewQueryLogs()
+	gw.adapters["search_logs"] = adapters.NewSearchLogs()
+	gw.adapters["query_logs_by_trace"] = adapters.NewQueryLogsByTrace()
+	gw.adapters["query_deployments"] = adapters.NewQueryDeployments()
 }
 
 // ListTools returns tools enabled for a given agent type.
@@ -114,6 +137,9 @@ func (gw *Gateway) ListTools(ctx context.Context, tenantID string, agentType dom
 		if !agentInList(agentType, meta.Agents) {
 			continue
 		}
+		if _, ok := gw.adapters[meta.Name]; !ok {
+			continue
+		}
 		result = append(result, *meta)
 	}
 	return result, nil
@@ -124,7 +150,7 @@ func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*
 	gw.mu.RLock()
 	meta, ok := gw.tools[req.ToolName]
 	adapter, hasAdapter := gw.adapters[req.ToolName]
-	approvalRepo := gw.approvalRepo
+	recordRepo := gw.recordRepo
 	gw.mu.RUnlock()
 
 	if !ok || !meta.Enabled {
@@ -134,28 +160,26 @@ func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*
 		return nil, apperr.New(50003, 500, fmt.Sprintf("tool %q has no adapter", req.ToolName))
 	}
 
-	// L2 tools: require sre_admin+ or create an approval.
+	// L2 writes require a durable execution intent: an immutable, protected
+	// parameter snapshot, approval/task binding, SoD, outbox and idempotent
+	// executor fencing. The current platform has no configured L2 adapter or
+	// such executor. Creating an approval here would be deceptive: approval
+	// could succeed while the original action can never safely resume. Refuse
+	// all L2 calls until that workflow is available (including admins, so an
+	// admin role cannot bypass the missing evidence/approval boundary).
 	if meta.RiskLevel == domain.ToolRiskL2Write {
-		roles := ctxkeys.RolesFrom(ctx)
-		if !hasRole(roles, domain.RoleSREAdmin, domain.RolePlatformAdmin) {
-			if approvalRepo == nil {
-				return nil, apperr.ErrForbidden
-			}
-			approvalID, err := gw.createApproval(ctx, approvalRepo, req, meta)
-			if err != nil {
-				return nil, apperr.Wrap(err, apperr.ErrInternal)
-			}
-			return &domain.ToolInvokeResponse{
-				Output:     "工具调用需要审批，已创建审批单",
-				Status:     "awaiting_approval",
-				ApprovalID: approvalID,
-			}, nil
-		}
-		// sre_admin+ falls through to execute directly.
+		return nil, apperr.ErrHighRiskWorkflowUnavailable
 	} else if err := gw.checkRiskLevel(ctx, meta.RiskLevel); err != nil {
 		return nil, err
 	}
 
+	req.Input = completeToolInput(req.ToolName, req.Input, ctx)
+	// region debug-point p1-tool-input
+	g.Log().Infof(ctx, "[p1-tool-input] tool=%s agent=%s input=%s", req.ToolName, req.AgentType, redact.TelemetryProjection(string(req.Input)))
+	// endregion debug-point p1-tool-input
+	// #region debug-point A:tool-invoke-start
+	g.Log().Infof(ctx, "[DEBUG] tool invoke start trace=%s tool=%s agent=%s timeout_ms=%d", req.TraceID, req.ToolName, req.AgentType, meta.TimeoutMS)
+	// #endregion
 	start := time.Now()
 	timeout := time.Duration(meta.TimeoutMS) * time.Millisecond
 	if timeout <= 0 {
@@ -166,49 +190,80 @@ func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*
 
 	output, err := adapter(callCtx, req.Input)
 	latency := time.Since(start).Milliseconds()
+	var (
+		respStatus = "success"
+		respOutput = output
+	)
 	if err != nil {
-		return &domain.ToolInvokeResponse{
-			Output:    fmt.Sprintf("tool error: %v", err),
-			Status:    "error",
-			LatencyMS: int(latency),
-		}, nil
+		// region debug-point p1-p2-tool-error
+		g.Log().Warningf(ctx, "[p1-p2-tool-error] trace=%s tool=%s agent=%s status=error cause=%s", req.TraceID, req.ToolName, req.AgentType, redact.TelemetryProjection(err.Error()))
+		// endregion debug-point p1-p2-tool-error
+		respStatus = "error"
+		respOutput = "tool error: " + diagnosticSummary(err.Error(), 1000)
 	}
-	return &domain.ToolInvokeResponse{
-		Output:    output,
-		Status:    "success",
+	// Record evidence when the caller attached a tool sink to the context.
+	// This is how the Ops Agent builds a structured proof chain without
+	// touching the executor or the shared gateway state.
+	inputSummary := redact.TelemetryProjection(string(req.Input))
+	outputSummary := redact.TelemetryProjection(respOutput)
+	if sink := ctxkeys.ToolSinkFrom(ctx); sink != nil {
+		*sink = append(*sink, domain.Evidence{
+			ToolName:  req.ToolName,
+			Input:     inputSummary,
+			Output:    outputSummary,
+			Status:    respStatus,
+			LatencyMS: latency,
+			Timestamp: time.Now().UTC().Format("2006-01-02 15:04:05"),
+		})
+	}
+	// #region debug-point A:tool-invoke-result
+	g.Log().Infof(ctx, "[DEBUG] tool invoke result trace=%s tool=%s agent=%s status=%s latency_ms=%d output=%s", req.TraceID, req.ToolName, req.AgentType, respStatus, latency, redact.TelemetryProjection(respOutput))
+	// #endregion
+	if sink := ctxkeys.StepSinkFrom(ctx); sink != nil {
+		errMsg := ""
+		if err != nil {
+			errMsg = redact.TelemetryProjection(err.Error())
+		}
+		sink("tool", req.ToolName, inputSummary, outputSummary, respStatus, latency, errMsg)
+	}
+	if recordRepo != nil {
+		tenantID := req.TenantID
+		if tenantID == "" {
+			tenantID = ctxkeys.TenantIDFrom(ctx)
+		}
+		_ = recordRepo.Create(ctx, &repository.ToolCallRecord{
+			TenantID:  tenantID,
+			TraceID:   req.TraceID,
+			ToolName:  req.ToolName,
+			AgentType: string(req.AgentType),
+			Input:     inputSummary,
+			Output:    outputSummary,
+			Status:    respStatus,
+			LatencyMS: latency,
+		})
+	}
+	response := &domain.ToolInvokeResponse{
+		Output:    respOutput,
+		Status:    respStatus,
 		LatencyMS: int(latency),
-	}, nil
+	}
+	if err != nil {
+		return response, err
+	}
+	return response, nil
 }
 
-// createApproval creates a pending approval record for a high-risk tool invocation.
-func (gw *Gateway) createApproval(ctx context.Context, repo *repository.ApprovalRepo, req *domain.ToolInvokeRequest, meta *domain.ToolMeta) (string, error) {
-	tenantID := ctxkeys.TenantIDFrom(ctx)
-	if tenantID == "" {
-		tenantID = domain.DefaultTenantID
-	}
-	userID := ctxkeys.UserIDFrom(ctx)
-	approvalID := "apv_" + uuid.NewString()
+// truncateJSON keeps evidence payloads small enough to fit in an LLM context
+// and in the detail_json column.
+func truncateJSON(s string, maxLen int) string {
+	return diagnosticSummary(s, maxLen)
+}
 
-	payload, _ := json.Marshal(map[string]interface{}{
-		"tool_name":  req.ToolName,
-		"input":      string(req.Input),
-		"user_id":    userID,
-		"agent_type": req.AgentType,
-	})
-
-	approval := &repository.Approval{
-		TenantID:     tenantID,
-		ApprovalID:   approvalID,
-		TaskID:       req.ToolName,
-		ApprovalType: "tool_invoke",
-		PayloadJSON:  string(payload),
-		Status:       "pending",
-		ExpiredAt:    time.Now().Add(24 * time.Hour),
-	}
-	if err := repo.Create(ctx, approval); err != nil {
-		return "", err
-	}
-	return approvalID, nil
+// diagnosticSummary is deliberately used only for logs, trace steps and
+// durable diagnostic records. Tool adapters and LLM execution still receive
+// the original request and successful response values.
+func diagnosticSummary(s string, maxLen int) string {
+	return redact.Summary(redact.JSON(s), maxLen)
 }
 
 func (gw *Gateway) checkRiskLevel(ctx context.Context, riskLevel domain.ToolRiskLevel) error {
@@ -243,17 +298,6 @@ func agentInList(agent domain.AgentType, list []domain.AgentType) bool {
 	for _, a := range list {
 		if a == agent {
 			return true
-		}
-	}
-	return false
-}
-
-func hasRole(roles []string, allowed ...domain.Role) bool {
-	for _, role := range roles {
-		for _, allowedRole := range allowed {
-			if domain.Role(role) == allowedRole {
-				return true
-			}
 		}
 	}
 	return false

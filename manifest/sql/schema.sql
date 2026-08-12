@@ -45,6 +45,27 @@ CREATE TABLE IF NOT EXISTS ws_session (
     KEY idx_user (tenant_id, user_id, updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Durable ownership and safe replay state for synchronous Chat requests that
+-- supply Idempotency-Key. Payload bodies are never stored here.
+CREATE TABLE IF NOT EXISTS ws_chat_turn (
+    id                BIGINT PRIMARY KEY AUTO_INCREMENT,
+    tenant_id         VARCHAR(64)  NOT NULL,
+    user_id           VARCHAR(64)  NOT NULL,
+    session_id        VARCHAR(64)  NOT NULL,
+    idempotency_key   VARCHAR(128) NOT NULL,
+    request_hash      CHAR(64)     NOT NULL,
+    status            VARCHAR(16)  NOT NULL DEFAULT 'running',
+    execution_token   VARCHAR(64)  NOT NULL DEFAULT '',
+    response_json     MEDIUMTEXT,
+    trace_id          VARCHAR(64)  NOT NULL DEFAULT '',
+    error_class       VARCHAR(64)  NOT NULL DEFAULT '',
+    created_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at       DATETIME,
+    updated_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_chat_turn (tenant_id, user_id, session_id, idempotency_key),
+    KEY idx_chat_turn_status (status, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS ws_document (
     id            BIGINT PRIMARY KEY AUTO_INCREMENT,
     tenant_id     VARCHAR(64)  NOT NULL,
@@ -63,19 +84,86 @@ CREATE TABLE IF NOT EXISTS ws_document (
     KEY idx_source (tenant_id, source_uri(255))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Durable publication state for staged document index generations. Vector-store
+-- writes are external to MySQL, so this table is the authority for which
+-- generation may be returned to a caller.
+CREATE TABLE IF NOT EXISTS ws_document_index_state (
+    tenant_id           VARCHAR(64)  NOT NULL,
+    doc_id              VARCHAR(64)  NOT NULL,
+    next_generation     BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    desired_generation  BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    active_generation   BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    active_task_id      VARCHAR(64)  NOT NULL DEFAULT '',
+    legacy_allowed      TINYINT(1)   NOT NULL DEFAULT 1,
+    published_at        DATETIME,
+    created_at          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (tenant_id, doc_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Durable outbox for eventually deleting superseded or legacy RAG vectors.
+CREATE TABLE IF NOT EXISTS ws_rag_vector_gc_task (
+    id                BIGINT PRIMARY KEY AUTO_INCREMENT,
+    tenant_id         VARCHAR(64)  NOT NULL,
+    doc_id            VARCHAR(64)  NOT NULL,
+    target_key        VARCHAR(96)  NOT NULL,
+    target_kind       VARCHAR(32)  NOT NULL COMMENT 'generation|legacy|document_all',
+    target_generation BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    reason            VARCHAR(128) NOT NULL DEFAULT '',
+    status            VARCHAR(32)  NOT NULL DEFAULT 'pending',
+    attempt_count     INT          NOT NULL DEFAULT 0,
+    max_attempts      INT          NOT NULL DEFAULT 8,
+    next_attempt_at   DATETIME,
+    lease_expires_at  DATETIME,
+    execution_token   VARCHAR(64)  NOT NULL DEFAULT '',
+    last_error        TEXT,
+    finished_at       DATETIME,
+    created_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_rag_gc_target (tenant_id, doc_id, target_key),
+    KEY idx_rag_gc_runnable (status, next_attempt_at, lease_expires_at, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE IF NOT EXISTS ws_index_task (
     id            BIGINT PRIMARY KEY AUTO_INCREMENT,
     tenant_id     VARCHAR(64)  NOT NULL,
     task_id       VARCHAR(64)  NOT NULL,
     doc_id        VARCHAR(64)  NOT NULL,
+    source_uri    VARCHAR(1024) NOT NULL DEFAULT '',
+    visibility    VARCHAR(32)  NOT NULL DEFAULT 'tenant',
+    secret_level  TINYINT      NOT NULL DEFAULT 1,
+    layer         VARCHAR(32)  NOT NULL DEFAULT 'static' COMMENT 'static|fault_case|temp',
+    version       VARCHAR(64)  NOT NULL DEFAULT '',
+    service       VARCHAR(128) NOT NULL DEFAULT '',
     status        VARCHAR(32)  NOT NULL DEFAULT 'pending',
     chunk_count   INT          NOT NULL DEFAULT 0,
     error_msg     TEXT,
     started_at    DATETIME,
     finished_at   DATETIME,
+    execution_token VARCHAR(64) NOT NULL DEFAULT '',
+	lease_expires_at DATETIME,
+    generation    BIGINT UNSIGNED NOT NULL DEFAULT 0,
     created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uk_task (tenant_id, task_id),
-    KEY idx_status (status, created_at)
+    UNIQUE KEY uk_index_generation (tenant_id, doc_id, generation),
+    KEY idx_status (status, created_at),
+	KEY idx_index_running (status, lease_expires_at, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS ws_alert_event (
+    id            BIGINT PRIMARY KEY AUTO_INCREMENT,
+    tenant_id     VARCHAR(64) NOT NULL,
+    event_id      VARCHAR(128) NOT NULL,
+    incident_key  VARCHAR(512) NOT NULL DEFAULT '',
+    receiver      VARCHAR(256) NOT NULL DEFAULT '',
+    group_key     VARCHAR(512) NOT NULL DEFAULT '',
+    status        VARCHAR(32) NOT NULL DEFAULT 'firing',
+    payload_json  JSON NOT NULL,
+    task_id       VARCHAR(64) NOT NULL DEFAULT '',
+    received_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at   DATETIME,
+    UNIQUE KEY uk_alert_event (tenant_id, event_id),
+    KEY idx_alert_incident (tenant_id, incident_key, received_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS ws_ops_task (
@@ -94,10 +182,13 @@ CREATE TABLE IF NOT EXISTS ws_ops_task (
     retry_count   INT          NOT NULL DEFAULT 0,
     max_retry     INT          NOT NULL DEFAULT 2,
     timeout_at    DATETIME,
+    next_attempt_at DATETIME,
+    execution_token VARCHAR(64) NOT NULL DEFAULT '',
     last_error    TEXT,
     created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uk_ops_task (tenant_id, task_id),
-    KEY idx_status (tenant_id, status, created_at)
+    KEY idx_status (tenant_id, status, created_at),
+    KEY idx_ops_runnable (status, next_attempt_at, timeout_at, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS ws_approval (
@@ -124,7 +215,7 @@ CREATE TABLE IF NOT EXISTS ws_audit_log (
     user_id       VARCHAR(64)  NOT NULL DEFAULT '',
     action        VARCHAR(64)  NOT NULL COMMENT 'chat.invoke|tool.invoke|doc.upload|ops.analyze',
     resource_type VARCHAR(32)  NOT NULL DEFAULT '',
-    resource_id   VARCHAR(64)  NOT NULL DEFAULT '',
+    resource_id   VARCHAR(255) NOT NULL DEFAULT '',
     request_json  JSON,
     response_code INT          NOT NULL DEFAULT 0,
     latency_ms    INT          NOT NULL DEFAULT 0,
@@ -152,6 +243,85 @@ CREATE TABLE IF NOT EXISTS ws_agent_trace (
     UNIQUE KEY uk_trace (trace_id),
     KEY idx_trace_tenant_time (tenant_id, created_at),
     KEY idx_trace_task (tenant_id, task_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS ws_agent_trace_step (
+    id             BIGINT PRIMARY KEY AUTO_INCREMENT,
+    trace_id       VARCHAR(64)  NOT NULL,
+    tenant_id      VARCHAR(64)  NOT NULL,
+    agent_type     VARCHAR(32)  NOT NULL,
+    step_type      VARCHAR(32)  NOT NULL COMMENT 'rag|tool|planner|executor|replanner|model',
+    step_name      VARCHAR(128) NOT NULL DEFAULT '',
+    input_summary  TEXT,
+    output_summary TEXT,
+    status         VARCHAR(32)  NOT NULL DEFAULT 'success',
+    latency_ms     BIGINT       NOT NULL DEFAULT 0,
+    error_msg      TEXT,
+    created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_trace_step (trace_id, id),
+    KEY idx_tenant_time (tenant_id, created_at),
+    KEY idx_step_type (agent_type, step_type, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS ws_tool_call_record (
+    id          BIGINT PRIMARY KEY AUTO_INCREMENT,
+    tenant_id   VARCHAR(64)  NOT NULL,
+    trace_id    VARCHAR(64)  NOT NULL DEFAULT '',
+    tool_name   VARCHAR(128) NOT NULL,
+    agent_type  VARCHAR(32)  NOT NULL DEFAULT '',
+    input_json  TEXT,
+    output_text MEDIUMTEXT,
+    status      VARCHAR(32)  NOT NULL DEFAULT 'success',
+    latency_ms  BIGINT       NOT NULL DEFAULT 0,
+    created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    KEY idx_trace_tool (trace_id, id),
+    KEY idx_tenant_tool_time (tenant_id, tool_name, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS ws_fault_knowledge (
+    id            BIGINT PRIMARY KEY AUTO_INCREMENT,
+    tenant_id     VARCHAR(64)  NOT NULL,
+    card_id       VARCHAR(64)  NOT NULL,
+    task_id       VARCHAR(64)  NOT NULL DEFAULT '',
+    trace_id      VARCHAR(64)  NOT NULL DEFAULT '',
+    title         VARCHAR(512) NOT NULL DEFAULT '',
+    symptom       TEXT,
+    impact        TEXT,
+    root_cause    TEXT,
+    workaround    TEXT,
+    remediation   TEXT,
+    evidence_json JSON,
+    service       VARCHAR(128) NOT NULL DEFAULT '',
+    version       VARCHAR(64)  NOT NULL DEFAULT '',
+    status        VARCHAR(32)  NOT NULL DEFAULT 'draft' COMMENT 'draft|approved|rejected|archived',
+    weight        DOUBLE       NOT NULL DEFAULT 1.0,
+    doc_id        VARCHAR(64)  NOT NULL DEFAULT '',
+    hit_count     INT          NOT NULL DEFAULT 0,
+    useful_count  INT          NOT NULL DEFAULT 0,
+    bad_count     INT          NOT NULL DEFAULT 0,
+    created_by    VARCHAR(64)  NOT NULL DEFAULT '',
+    reviewed_by   VARCHAR(64)  NOT NULL DEFAULT '',
+    reviewed_at   DATETIME,
+    created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_card (tenant_id, card_id),
+    UNIQUE KEY uk_task (tenant_id, task_id),
+    KEY idx_status_time (tenant_id, status, updated_at),
+    KEY idx_service_version (tenant_id, service, version)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS ws_feedback (
+    id            BIGINT PRIMARY KEY AUTO_INCREMENT,
+    tenant_id     VARCHAR(64) NOT NULL,
+    feedback_id   VARCHAR(64) NOT NULL,
+    target_type   VARCHAR(32) NOT NULL COMMENT 'fault_knowledge|answer|tool_call',
+    target_id     VARCHAR(64) NOT NULL,
+    rating        VARCHAR(16) NOT NULL COMMENT 'useful|bad',
+    comment       VARCHAR(1024) NOT NULL DEFAULT '',
+    created_by    VARCHAR(64) NOT NULL DEFAULT '',
+    created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_feedback (tenant_id, feedback_id),
+    KEY idx_target (tenant_id, target_type, target_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS ws_agent_config (

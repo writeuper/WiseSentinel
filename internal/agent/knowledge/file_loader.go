@@ -48,14 +48,24 @@ func (l *FileLoader) Load(ctx context.Context, src document.Source, _ ...documen
 		visibility = "tenant"
 	}
 
+	meta := map[string]any{
+		"_source":      src.URI,
+		"tenant_id":    req.TenantID,
+		"doc_id":       req.DocID,
+		"visibility":   visibility,
+		"secret_level": secretLevel,
+	}
+	if req.Layer != "" {
+		meta["_layer"] = string(req.Layer)
+	}
+	if req.Version != "" {
+		meta["version"] = req.Version
+	}
+	if req.Service != "" {
+		meta["service"] = req.Service
+	}
 	return []*schema.Document{{
-		Content: string(raw),
-		MetaData: map[string]any{
-			"_source":      src.URI,
-			"tenant_id":    req.TenantID,
-			"doc_id":       req.DocID,
-			"visibility":   visibility,
-			"secret_level": secretLevel,
-		},
+		Content:  string(raw),
+		MetaData: meta,
 	}}, nil
 }
