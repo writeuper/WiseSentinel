@@ -177,6 +177,16 @@ class Client:
 def build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     latencies = [float(row["latency_ms"]) for row in results]
     successes = [row for row in results if row["outcome"] == "success"]
+    latency_by_outcome: dict[str, dict[str, Any]] = {}
+    for outcome in sorted({str(row["outcome"]) for row in results}):
+        values = [float(row["latency_ms"]) for row in results if str(row["outcome"]) == outcome]
+        latency_by_outcome[outcome] = {
+            "count": len(values),
+            "p50": percentile(values, 0.50),
+            "p95": percentile(values, 0.95),
+            "p99": percentile(values, 0.99),
+            "max": max(values) if values else None,
+        }
     return {
         "requests": len(results),
         "successes": len(successes),
@@ -185,6 +195,7 @@ def build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         "cleanup": dict(sorted(Counter(str(row.get("cleanup") or "not_recorded") for row in results).items())),
         "overload_history": dict(sorted(Counter(str(row["overload_history"]) for row in results if row.get("overload_history")).items())),
         "latency_ms": {"p50": percentile(latencies, 0.50), "p95": percentile(latencies, 0.95), "p99": percentile(latencies, 0.99), "max": max(latencies) if latencies else None},
+        "latency_by_outcome": latency_by_outcome,
     }
 
 
@@ -203,6 +214,15 @@ def quality_gate(summary: dict[str, Any], min_success_rate: float, max_p95_ms: i
     overload_history = summary.get("overload_history") or {}
     if overload_history and overload_history != {"empty": sum(overload_history.values())}:
         failures.append("overload_history")
+    outcomes = summary.get("outcomes") or {}
+    metrics = summary.get("model_metrics_delta")
+    api_overload_count = int(outcomes.get("api_50304", 0) or 0)
+    if metrics is None:
+        failures.append("admission_attribution_unavailable")
+    else:
+        admission_rejections = int(round(float(metrics.get("admission_rejections", 0.0) or 0.0)))
+        if api_overload_count != admission_rejections:
+            failures.append("admission_attribution")
     p95 = (summary.get("latency_ms") or {}).get("p95")
     if max_p95_ms > 0 and (p95 is None or p95 > max_p95_ms):
         failures.append("p95_latency")

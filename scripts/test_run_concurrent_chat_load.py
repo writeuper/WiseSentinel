@@ -48,6 +48,21 @@ class ConcurrentChatLoadTests(unittest.TestCase):
         self.assertEqual(summary["outcomes"], {"rate_limited": 1, "success": 2})
         self.assertEqual(summary["overload_history"], {})
         self.assertEqual(summary["latency_ms"], {"p50": 200.0, "p95": 300.0, "p99": 300.0, "max": 300.0})
+        self.assertEqual(summary["latency_by_outcome"], {
+            "rate_limited": {"count": 1, "p50": 200.0, "p95": 200.0, "p99": 200.0, "max": 200.0},
+            "success": {"count": 2, "p50": 100.0, "p95": 300.0, "p99": 300.0, "max": 300.0},
+        })
+
+    def test_build_summary_separates_admission_rejections_from_success_latency(self) -> None:
+        summary = MODULE.build_summary([
+            {"outcome": "api_50304", "latency_ms": 90},
+            {"outcome": "api_50304", "latency_ms": 110},
+            {"outcome": "success", "latency_ms": 9000},
+            {"outcome": "success", "latency_ms": 12000},
+        ])
+        self.assertEqual(summary["latency_by_outcome"]["api_50304"]["count"], 2)
+        self.assertEqual(summary["latency_by_outcome"]["api_50304"]["p50"], 90.0)
+        self.assertEqual(summary["latency_by_outcome"]["success"]["p50"], 9000.0)
 
     def test_model_metric_parser_discards_labels(self) -> None:
         metrics = MODULE.parse_model_metric_totals("\n".join([
@@ -69,6 +84,8 @@ class ConcurrentChatLoadTests(unittest.TestCase):
             "requests": 2,
             "success_rate": 1.0,
             "cleanup": {"verified": 2},
+            "outcomes": {"success": 2},
+            "model_metrics_delta": {"admission_rejections": 0.0},
             "latency_ms": {"p95": 1500.0},
         }
         self.assertEqual(MODULE.quality_gate(summary, 1.0, 0), [])
@@ -78,3 +95,14 @@ class ConcurrentChatLoadTests(unittest.TestCase):
         summary["cleanup"] = {"verified": 2}
         summary["overload_history"] = {"unexpected_messages": 1}
         self.assertEqual(MODULE.quality_gate(summary, 1.0, 0), ["overload_history"])
+
+    def test_quality_gate_detects_admission_attribution_mismatch(self) -> None:
+        summary = {
+            "requests": 3,
+            "success_rate": 1.0,
+            "cleanup": {"verified": 3},
+            "outcomes": {"success": 2, "api_50304": 1},
+            "model_metrics_delta": {"admission_rejections": 0.0},
+            "latency_ms": {"p95": 100.0},
+        }
+        self.assertEqual(MODULE.quality_gate(summary, 0.0, 0), ["admission_attribution"])
