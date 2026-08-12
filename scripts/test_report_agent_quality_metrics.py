@@ -11,6 +11,11 @@ SPEC.loader.exec_module(MODULE)
 
 
 class ReportMetricsTests(unittest.TestCase):
+    def test_terminal_failure_query_is_not_limited_to_legacy_status_names(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertIn("status NOT IN ('success','completed')", source)
+        self.assertNotIn("status IN ('failed','error','timeout','canceled')", source)
+
     def test_parse_histogram_separates_success_and_error(self):
         text = """
 ws_rag_retrieval_duration_seconds_bucket{outcome="success",confidence="high",le="0.25"} 3

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	"wisesentinel-platform/internal/pkg/configx"
@@ -22,7 +23,9 @@ const (
 
 // MilvusClient wraps the Milvus SDK with WiseSentinel schema conventions.
 type MilvusClient struct {
+	mu         sync.RWMutex
 	client     milvus.Client
+	cfg        Config
 	address    string
 	dbName     string
 	collection string
@@ -65,6 +68,10 @@ const connectTimeout = 5 * time.Second
 // NewMilvusClient connects to Milvus and ensures database/collection exist.
 func NewMilvusClient(ctx context.Context) (*MilvusClient, error) {
 	cfg := LoadConfig(ctx)
+	return newMilvusClient(ctx, cfg)
+}
+
+func newMilvusClient(ctx context.Context, cfg Config) (*MilvusClient, error) {
 
 	connCtx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
@@ -96,6 +103,7 @@ func NewMilvusClient(ctx context.Context) (*MilvusClient, error) {
 
 	mc := &MilvusClient{
 		client:     agentClient,
+		cfg:        cfg,
 		address:    cfg.Address,
 		dbName:     cfg.DBName,
 		collection: cfg.Collection,
@@ -185,6 +193,11 @@ func collectionFields() []*entity.Field {
 
 // Client returns the underlying Milvus SDK client.
 func (m *MilvusClient) Client() milvus.Client {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.client
 }
 
@@ -195,11 +208,47 @@ func (m *MilvusClient) Collection() string {
 
 // Ping verifies Milvus connectivity.
 func (m *MilvusClient) Ping(ctx context.Context) error {
-	if m == nil || m.client == nil {
+	if m == nil {
 		return fmt.Errorf("milvus client is nil")
 	}
-	_, err := m.client.ListCollections(ctx)
-	return err
+	m.mu.RLock()
+	c := m.client
+	m.mu.RUnlock()
+	if c == nil {
+		return fmt.Errorf("milvus client is nil")
+	}
+	if _, err := c.ListCollections(ctx); err == nil {
+		return nil
+	} else if reconnectErr := m.reconnect(ctx); reconnectErr != nil {
+		return fmt.Errorf("milvus ping: %w; reconnect: %v", err, reconnectErr)
+	}
+	return nil
+}
+
+// reconnect replaces a stale SDK connection after Milvus has restarted. The
+// wrapper is shared by RAG, index and GC components, so swapping the client in
+// place lets all existing components recover without rebuilding the App.
+func (m *MilvusClient) reconnect(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.client != nil {
+		probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		_, err := m.client.ListCollections(probeCtx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+	}
+	next, err := newMilvusClient(ctx, m.cfg)
+	if err != nil {
+		return err
+	}
+	old := m.client
+	m.client = next.client
+	if old != nil {
+		old.Close()
+	}
+	return nil
 }
 
 // PhysicalVectorCount returns the configured collection's complete physical

@@ -113,17 +113,20 @@ def fetch_metrics(url: str) -> dict[str, Any]:
 
 
 def aggregate() -> dict[str, Any]:
+    # A non-null finished_at is the durable terminal marker. Treat every
+    # finished non-success status as terminal failure so adding a new terminal
+    # state cannot silently drop it from the latency denominator.
     traces = mysql_query("""
       SELECT COUNT(*), COALESCE(SUM(CASE WHEN status IN ('success','completed') THEN 1 ELSE 0 END),0),
-             COALESCE(SUM(CASE WHEN status IN ('failed','error','timeout','canceled') THEN 1 ELSE 0 END),0),
+             COALESCE(SUM(CASE WHEN status NOT IN ('success','completed') THEN 1 ELSE 0 END),0),
              COALESCE(AVG(CASE WHEN status IN ('success','completed') THEN latency_ms END),0),
-             COALESCE(AVG(CASE WHEN status IN ('failed','error','timeout','canceled') THEN latency_ms END),0)
+             COALESCE(AVG(CASE WHEN status NOT IN ('success','completed') THEN latency_ms END),0)
       FROM ws_agent_trace WHERE finished_at IS NOT NULL
     """)[0]
     latency_by_agent = mysql_query("""
       SELECT agent_type, COUNT(*),
              COALESCE(AVG(CASE WHEN status IN ('success','completed') THEN latency_ms END),0),
-             COALESCE(AVG(CASE WHEN status IN ('failed','error','timeout','canceled') THEN latency_ms END),0),
+             COALESCE(AVG(CASE WHEN status NOT IN ('success','completed') THEN latency_ms END),0),
              COALESCE(AVG(latency_ms),0)
       FROM ws_agent_trace WHERE finished_at IS NOT NULL
       GROUP BY agent_type ORDER BY agent_type
