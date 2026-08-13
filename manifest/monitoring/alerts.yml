@@ -75,6 +75,34 @@ groups:
           summary: WiseSentinel Ops task p95 latency is high
           description: Ops end-to-end task p95 latency is above 10 seconds for more than 10 minutes. Check queue backlog, model latency, tool retries and replanning.
 
+      - alert: WiseSentinelModelFailureRate
+        expr: |
+          sum(rate(ws_model_calls_total{job="wisesentinel-platform",outcome=~"timeout|overloaded|upstream_error"}[5m]))
+          /
+          clamp_min(sum(rate(ws_model_calls_total{job="wisesentinel-platform"}[5m])), 1)
+          > 0.10
+        for: 10m
+        labels:
+          severity: warning
+          component: model
+        annotations:
+          summary: WiseSentinel model failure rate is high
+          description: Model phases with timeout, overload or upstream error exceed 10% of model calls for more than 10 minutes. Check provider health, circuit breakers, timeouts and deployment credentials.
+
+      - alert: WiseSentinelModelAdmissionRejections
+        expr: |
+          sum(rate(ws_model_admission_rejections_total{job="wisesentinel-platform"}[5m]))
+          /
+          clamp_min(sum(rate(ws_model_calls_total{job="wisesentinel-platform"}[5m])), 1)
+          > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          component: model
+        annotations:
+          summary: WiseSentinel model admission is saturated
+          description: More than 5% of model calls are rejected by local admission control for more than 10 minutes. Review provider concurrency limits and workload shaping before increasing capacity.
+
       - alert: WiseSentinelRAGVectorGCDeadLetter
         expr: ws_rag_vector_gc_dead_tasks_24h > 0
         for: 5m

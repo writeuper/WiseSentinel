@@ -1,6 +1,10 @@
 package metrics
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"strings"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 var (
 	opsTaskDuration = prometheus.NewHistogramVec(
@@ -22,5 +26,23 @@ func ObserveOpsTaskDuration(stage, status string, seconds float64) {
 	if seconds < 0 {
 		return
 	}
-	opsTaskDuration.WithLabelValues(stage, status).Observe(seconds)
+	opsTaskDuration.WithLabelValues(normalizeOpsStage(stage), normalizeOpsStatus(status)).Observe(seconds)
+}
+
+func normalizeOpsStage(stage string) string {
+	switch strings.TrimSpace(stage) {
+	case "queue", "run", "e2e":
+		return strings.TrimSpace(stage)
+	default:
+		return "other"
+	}
+}
+
+func normalizeOpsStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case "pending", "running", "success", "failed", "timeout", "retrying", "abandoned":
+		return strings.TrimSpace(status)
+	default:
+		return "other"
+	}
 }

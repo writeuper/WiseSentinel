@@ -42,12 +42,21 @@ func HTTPMetrics(r *ghttp.Request) {
 		status = 200
 	}
 
-	method := r.Method
+	method := normalizeMethod(r.Method)
 	path := normalizePath(r.URL.Path)
 	code := strconv.Itoa(status)
 
 	httpRequestsTotal.WithLabelValues(method, path, code).Inc()
 	httpRequestDuration.WithLabelValues(method, path).Observe(time.Since(start).Seconds())
+}
+
+func normalizeMethod(method string) string {
+	switch strings.ToUpper(strings.TrimSpace(method)) {
+	case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
+		return strings.ToUpper(strings.TrimSpace(method))
+	default:
+		return "OTHER"
+	}
 }
 
 // normalizePath collapses dynamic path segments to limit metric cardinality.

@@ -18,3 +18,14 @@ func TestNormalizePathEliminatesDynamicMetricLabels(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeMethodBoundsMetricLabels(t *testing.T) {
+	for _, tc := range []struct{ input, want string }{
+		{"get", "GET"}, {"POST", "POST"}, {" options ", "OPTIONS"},
+		{"TRACE-secret-tenant", "OTHER"}, {"", "OTHER"},
+	} {
+		if got := normalizeMethod(tc.input); got != tc.want {
+			t.Errorf("normalizeMethod(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
