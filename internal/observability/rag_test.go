@@ -62,6 +62,32 @@ func TestRAGInventoryMetricsAreUnlabelledAggregates(t *testing.T) {
 	}
 }
 
+func TestRAGRetrievalHistogramHasSubSecondPrecisionBuckets(t *testing.T) {
+	families, err := Registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "ws_rag_retrieval_duration_seconds" {
+			continue
+		}
+		if len(family.Metric) == 0 || family.Metric[0].Histogram == nil {
+			t.Fatal("RAG retrieval histogram missing")
+		}
+		seen := map[float64]bool{}
+		for _, bucket := range family.Metric[0].Histogram.Bucket {
+			seen[bucket.GetUpperBound()] = true
+		}
+		for _, want := range []float64{0.35, 0.4, 0.45, 0.5} {
+			if !seen[want] {
+				t.Errorf("RAG histogram missing precision bucket %v", want)
+			}
+		}
+		return
+	}
+	t.Fatal("RAG retrieval histogram family not found")
+}
+
 func TestRAGInventoryRefreshErrorsUseBoundedStages(t *testing.T) {
 	ObserveRAGInventoryRefreshError("logical")
 	ObserveRAGInventoryRefreshError("physical")
