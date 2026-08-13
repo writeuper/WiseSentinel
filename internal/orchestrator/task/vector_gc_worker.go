@@ -135,10 +135,17 @@ func (w *VectorGCWorker) dispatch(parent context.Context, candidate *repository.
 	// Reload after Claim: the persisted attempt count determines retry/dead
 	// behavior, and this token fences any stale worker's completion.
 	task, err := w.tasks.Get(parent, candidate.TenantID, candidate.DocID, candidate.TargetKey)
-	if err != nil || task == nil || task.ExecutionToken != token {
-		if err != nil {
-			g.Log().Errorf(parent, "VectorGCWorker: reload claimed target=%s failed: %s", candidate.TargetKey, redact.Summary(err.Error(), 500))
-		}
+	if err != nil {
+		g.Log().Errorf(parent, "VectorGCWorker: reload claimed target=%s failed: %s", candidate.TargetKey, redact.Summary(err.Error(), 500))
+		// The claim succeeded, so leave an owned durable retry outcome instead
+		// of abandoning the row in running until the lease expires. The CAS in
+		// RetryIfOwned still fences a concurrent lease owner.
+		w.retry(parent, candidate, token, fmt.Sprintf("reload claimed task: %v", err))
+		return
+	}
+	if task == nil || task.ExecutionToken != token {
+		// A missing row or a different token means ownership is no longer
+		// provable; do not mutate a task that may belong to another worker.
 		return
 	}
 	go w.run(task, token)

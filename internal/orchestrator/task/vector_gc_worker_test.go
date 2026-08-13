@@ -14,16 +14,18 @@ type fakeVectorGCStore struct {
 	finishedError  string
 	retried        bool
 	retryAt        time.Time
+	getErr         error
+	claimed        bool
 }
 
 func (s *fakeVectorGCStore) ListRunnable(context.Context, int, time.Time) ([]*repository.VectorGCTask, error) {
 	return nil, nil
 }
 func (s *fakeVectorGCStore) Get(context.Context, string, string, string) (*repository.VectorGCTask, error) {
-	return nil, nil
+	return nil, s.getErr
 }
 func (s *fakeVectorGCStore) Claim(context.Context, string, string, string, string, time.Time) (bool, error) {
-	return false, nil
+	return s.claimed, nil
 }
 func (s *fakeVectorGCStore) FinishIfOwned(_ context.Context, _, _, _, _, status, lastError string) (bool, error) {
 	s.finishedStatus, s.finishedError = status, lastError
@@ -103,5 +105,21 @@ func TestVectorGCRetryDelayCaps(t *testing.T) {
 	}
 	if got := vectorGCRetryDelay(20); got != 5*time.Minute {
 		t.Fatalf("capped delay = %s", got)
+	}
+}
+
+func TestVectorGCWorkerRetriesWhenClaimReloadFails(t *testing.T) {
+	store := &fakeVectorGCStore{claimed: true, getErr: errors.New("database unavailable")}
+	worker := newVectorGCWorker(store, fakeVectorGCSafety{}, &fakeVectorGCDeleter{})
+	candidate := &repository.VectorGCTask{
+		TenantID: "tenant-a", DocID: "doc-a", TargetKey: "document:all",
+		TargetKind: repository.VectorGCTargetDocumentAll, AttemptCount: 1, MaxAttempts: 3,
+	}
+	worker.dispatch(context.Background(), candidate)
+	if !store.retried {
+		t.Fatal("claimed task reload failure left task without a retry transition")
+	}
+	if store.retryAt.IsZero() {
+		t.Fatal("reload failure retry did not schedule a durable retry")
 	}
 }
