@@ -127,6 +127,15 @@ ws_model_admission_wait_seconds_count{provider="openai",outcome="rejected"} 2
         self.assertEqual(logs["p50_ms"], 200.0)
         self.assertEqual(logs["p95_ms"], 900.0)
 
+    def test_aggregate_index_tasks_separates_failed_and_retryable_states(self):
+        report = MODULE.aggregate_index_tasks([
+            ["success", "4"], ["failed", "2"], ["retry_wait", "1"], ["running", "1"],
+        ])
+        self.assertEqual(report["total"], 8)
+        self.assertEqual(report["failed_or_dead"], 2)
+        self.assertEqual(report["retryable_or_running"], 2)
+        self.assertEqual(report["failure_rate"], 25.0)
+
     def test_aggregate_trace_latency_separates_abandoned_and_reports_percentiles(self):
         report = MODULE.aggregate_trace_latency([
             ["success", "100"], ["success", "200"], ["failed", "900"],

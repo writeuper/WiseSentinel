@@ -96,6 +96,26 @@ def aggregate_tool_latency(rows: list[list[str]]) -> dict[str, Any]:
     return {"tool_count": len(result), "by_tool": result}
 
 
+def aggregate_index_tasks(rows: list[list[str]]) -> dict[str, Any]:
+    """Aggregate durable index-task statuses without exposing task/document IDs."""
+    counts: dict[str, int] = defaultdict(int)
+    for row in rows:
+        if not row:
+            continue
+        status = str(row[0] or "unknown")
+        counts[status] += safe_int(row[1]) if len(row) > 1 else 1
+    total = sum(counts.values())
+    failed = sum(value for status, value in counts.items() if status in {"failed", "dead"})
+    retryable = sum(value for status, value in counts.items() if status in {"pending", "retry_wait", "running"})
+    return {
+        "total": total,
+        "by_status": dict(sorted(counts.items())),
+        "failed_or_dead": failed,
+        "retryable_or_running": retryable,
+        "failure_rate": round(failed / total * 100, 2) if total else None,
+    }
+
+
 def aggregate_trace_latency(rows: list[list[str]]) -> dict[str, Any]:
     """Aggregate durable Agent trace latency without exposing identifiers.
 
@@ -380,6 +400,17 @@ def aggregate() -> dict[str, Any]:
       FROM ws_tool_call_record
       WHERE latency_ms >= 0
     """)
+    index_task_rows = mysql_query("""
+      SELECT status, COUNT(*)
+      FROM ws_index_task
+      GROUP BY status
+    """)
+    index_task_recent_rows = mysql_query("""
+      SELECT status, COUNT(*)
+      FROM ws_index_task
+      WHERE created_at >= NOW() - INTERVAL 24 HOUR
+      GROUP BY status
+    """)
     metrics_text = fetch_raw_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics"))
     result: dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -401,6 +432,8 @@ def aggregate() -> dict[str, Any]:
         "tool_calls": {"total": safe_int(tools[0]), "successful": safe_int(tools[1]),
                         "success_rate": round(safe_int(tools[1]) / safe_int(tools[0]) * 100, 2) if safe_int(tools[0]) else None,
                         **aggregate_tool_latency(tool_latency_rows)},
+        "index_tasks": aggregate_index_tasks(index_task_rows),
+        "index_tasks_recent_24h": aggregate_index_tasks(index_task_recent_rows),
         "rag_retrieval": parse_prometheus(metrics_text) if metrics_text else fetch_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics")),
         "rag_inventory": parse_rag_inventory(metrics_text),
         "model_generation": parse_model_prometheus(metrics_text),
@@ -434,6 +467,10 @@ def main() -> int:
             print(f"- Agent latency {label}: samples={latency['samples']}, p50={latency['p50_ms'] if latency['p50_ms'] is not None else 'N/A'} ms, p95={latency['p95_ms'] if latency['p95_ms'] is not None else 'N/A'} ms")
         print(f"- Average Agent steps/trace: {report['steps']['avg_per_trace']}")
         print(f"- Tool success rate: {report['tool_calls']['success_rate'] if report['tool_calls']['success_rate'] is not None else 'N/A'}%")
+        index_tasks = report["index_tasks"]
+        print(f"- Index tasks: total={index_tasks['total']}, failed_or_dead={index_tasks['failed_or_dead']}, retryable_or_running={index_tasks['retryable_or_running']}, failure_rate={index_tasks['failure_rate'] if index_tasks['failure_rate'] is not None else 'N/A'}%")
+        recent_index_tasks = report["index_tasks_recent_24h"]
+        print(f"- Index tasks (last 24h): total={recent_index_tasks['total']}, failed_or_dead={recent_index_tasks['failed_or_dead']}, retryable_or_running={recent_index_tasks['retryable_or_running']}, failure_rate={recent_index_tasks['failure_rate'] if recent_index_tasks['failure_rate'] is not None else 'N/A'}%")
         for tool in report["tool_calls"]["by_tool"]:
             zero_note = f", zero_latency={tool['zero_latency_samples']} ({tool['zero_latency_rate']}%)" if tool["zero_latency_samples"] else ""
             print(f"- Tool {tool['tool_name']}: calls={tool['calls']}, success_rate={tool['success_rate']}%, p50={tool['p50_ms']} ms, p95={tool['p95_ms']} ms, success_p95={tool['success_p95_ms']} ms{zero_note}")
