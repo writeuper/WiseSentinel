@@ -45,6 +45,16 @@ groups:
           summary: WiseSentinel RAG vector-GC has dead-letter tasks
           description: A vector cleanup task entered dead-letter state within the last 24 hours. Inspect the tenant-scoped Vector GC administration queue and use the approval-controlled redrive flow. Historical dead backlog is tracked separately.
 
+      - alert: WiseSentinelRAGVectorGCHistoricalBacklog
+        expr: ws_rag_vector_gc_tasks{status="dead"} > 20
+        for: 30m
+        labels:
+          severity: info
+          component: rag
+        annotations:
+          summary: WiseSentinel RAG vector-GC historical backlog is elevated
+          description: Historical vector-GC dead-letter backlog remains above 20 tasks for 30 minutes. This is a governance/cleanup queue, not necessarily a new incident; review tenant-scoped tasks and use the approval-controlled redrive flow after checking Milvus capacity.
+
       - alert: WiseSentinelRAGVectorGCRetryBacklog
         expr: ws_rag_vector_gc_tasks{status="retry_wait"} > 20
         for: 15m
