@@ -997,7 +997,10 @@ func (c *ControllerV1) RequestVectorGCRedrive(ctx context.Context, req *v1.Reque
 	approvalID := "gc-approval-" + uuid.NewString()
 	resolvedID, _, err := c.app.VectorGCRepo.RequestRedriveApproval(ctx, tenantID, req.DocID, req.TargetKey, userID, approvalID, string(payload), time.Now().Add(15*time.Minute))
 	if err != nil {
-		return nil, apperr.Wrap(err, apperr.ErrBadRequest)
+		// Redrive is an operator-facing API. Preserve only a stable business
+		// error; SQL driver details (including "no rows") must never reach the
+		// client or become a misleading 500 response.
+		return nil, apperr.New(40002, 400, "向量清理任务不存在、不是死信或已不可重驱")
 	}
 	return &v1.RequestVectorGCRedriveRes{ApprovalID: resolvedID, Status: "pending"}, nil
 }

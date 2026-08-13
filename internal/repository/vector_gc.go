@@ -152,6 +152,9 @@ func (r *VectorGCRepo) RequestRedriveApproval(ctx context.Context, tenantID, doc
 	err := g.DB().Transaction(ctx, func(txCtx context.Context, tx gdb.TX) error {
 		var task VectorGCTask
 		if err := tx.GetStruct(&task, `SELECT tenant_id, doc_id, target_key, status FROM ws_rag_vector_gc_task WHERE tenant_id = ? AND doc_id = ? AND target_key = ? FOR UPDATE`, tenantID, docID, targetKey); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("vector GC target not found")
+			}
 			return err
 		}
 		if task.TargetKey == "" || task.Status != "dead" {
