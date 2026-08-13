@@ -284,10 +284,11 @@ func (c *ControllerV1) Chat(ctx context.Context, req *v1.ChatReq) (*v1.ChatRes, 
 	if replay != nil {
 		return replay, nil
 	}
-	failTurn := func(errorClass string) {
+	failTurn := func(errorClass string) error {
 		if turn != nil {
-			_ = c.app.ChatTurnRepo.Fail(ctx, turn, errorClass)
+			return c.app.ChatTurnRepo.Fail(ctx, turn, errorClass)
 		}
+		return nil
 	}
 
 	// Invoke chat agent
@@ -300,7 +301,9 @@ func (c *ControllerV1) Chat(ctx context.Context, req *v1.ChatReq) (*v1.ChatRes, 
 		Options:   options,
 	})
 	if err != nil {
-		failTurn("agent_error")
+		if persistErr := failTurn("agent_error"); persistErr != nil {
+			return nil, apperr.Wrap(persistErr, apperr.ErrInternal)
+		}
 		return nil, err
 	}
 
@@ -311,7 +314,9 @@ func (c *ControllerV1) Chat(ctx context.Context, req *v1.ChatReq) (*v1.ChatRes, 
 	userMsg := &domain.Message{Role: "user", Content: safeQuestion}
 	assistantMsg := &domain.Message{Role: "assistant", Content: safeAnswer}
 	if err := c.app.Memory.AppendMessages(ctx, tenantID, req.SessionID, userMsg, assistantMsg); err != nil {
-		failTurn("session_persist_error")
+		if persistErr := failTurn("session_persist_error"); persistErr != nil {
+			return nil, apperr.Wrap(persistErr, apperr.ErrInternal)
+		}
 		return nil, err
 	}
 
@@ -353,12 +358,20 @@ func (c *ControllerV1) Chat(ctx context.Context, req *v1.ChatReq) (*v1.ChatRes, 
 	if turn != nil {
 		payload, marshalErr := json.Marshal(response)
 		if marshalErr != nil {
-			failTurn("response_projection_error")
+			if persistErr := failTurn("response_projection_error"); persistErr != nil {
+				return nil, apperr.Wrap(persistErr, apperr.ErrInternal)
+			}
 			return nil, apperr.ErrInternal
 		}
 		saved, saveErr := c.app.ChatTurnRepo.Succeed(ctx, turn, string(payload), traceID)
-		if saveErr != nil || !saved {
-			return nil, apperr.ErrInternal
+		if saveErr != nil {
+			if persistErr := failTurn("turn_succeed_persist_error"); persistErr != nil {
+				return nil, apperr.Wrap(persistErr, apperr.ErrInternal)
+			}
+			return nil, apperr.Wrap(saveErr, apperr.ErrInternal)
+		}
+		if !saved {
+			return nil, apperr.ErrConflict
 		}
 	}
 	return response, nil
