@@ -145,6 +145,7 @@ func Init(ctx context.Context) (*App, error) {
 	if reaped, reapErr := traceRepo.ReapStaleRunning(ctx, 10*time.Minute); reapErr != nil {
 		g.Log().Warning(ctx, "stale Agent Trace reap failed:", reapErr)
 	} else if reaped > 0 {
+		observability.ObserveStaleTraceReaped(reaped)
 		g.Log().Infof(ctx, "reaped stale Agent Traces: %d", reaped)
 	}
 	faultKnowledgeRepo := repository.NewFaultKnowledgeRepo()
