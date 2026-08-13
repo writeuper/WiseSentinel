@@ -33,6 +33,7 @@ type OpsWorker struct {
 	opsAgent   domain.OpsAgent
 	pollPeriod time.Duration
 	lockTTL    time.Duration
+	health     workerHealth
 }
 
 // NewOpsWorker creates a worker instance.
@@ -48,7 +49,9 @@ func NewOpsWorker(taskRepo *repository.OpsTaskRepo, redis *redis.Client, opsAgen
 
 // Start runs the polling loop in a background goroutine until ctx is done.
 func (w *OpsWorker) Start(ctx context.Context) {
+	w.health.markStarted()
 	go func() {
+		defer w.health.markStopped()
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				g.Log().Errorf(ctx, "OpsWorker panic recovered: %v", recovered)
@@ -71,6 +74,7 @@ func (w *OpsWorker) Start(ctx context.Context) {
 
 // tick runs a single polling cycle.
 func (w *OpsWorker) tick(parent context.Context) {
+	w.health.markTick()
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	if _, err := w.taskRepo.ExpireTimedOut(ctx, time.Now()); err != nil {
@@ -86,6 +90,8 @@ func (w *OpsWorker) tick(parent context.Context) {
 		w.dispatch(ctx, t)
 	}
 }
+
+func (w *OpsWorker) Ready() bool { return w.health.ready(2 * w.pollPeriod) }
 
 // dispatch tries to acquire the lock and run the agent for a single task.
 func (w *OpsWorker) dispatch(ctx context.Context, t *repository.OpsTask) {

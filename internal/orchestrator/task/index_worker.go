@@ -22,6 +22,7 @@ type IndexWorker struct {
 	pollPeriod time.Duration
 	lockTTL    time.Duration
 	leaseTTL   time.Duration
+	health     workerHealth
 }
 
 func NewIndexWorker(taskRepo *repository.IndexTaskRepo, redis *redis.Client, executor domain.IndexTaskExecutor) *IndexWorker {
@@ -36,7 +37,9 @@ func NewIndexWorker(taskRepo *repository.IndexTaskRepo, redis *redis.Client, exe
 }
 
 func (w *IndexWorker) Start(ctx context.Context) {
+	w.health.markStarted()
 	go func() {
+		defer w.health.markStopped()
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				g.Log().Errorf(ctx, "IndexWorker panic recovered: %v", recovered)
@@ -58,6 +61,7 @@ func (w *IndexWorker) Start(ctx context.Context) {
 }
 
 func (w *IndexWorker) tick(parent context.Context) {
+	w.health.markTick()
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 
@@ -70,6 +74,8 @@ func (w *IndexWorker) tick(parent context.Context) {
 		w.dispatch(ctx, task)
 	}
 }
+
+func (w *IndexWorker) Ready() bool { return w.health.ready(2 * w.pollPeriod) }
 
 func (w *IndexWorker) dispatch(ctx context.Context, task *repository.IndexTaskRecord) {
 	executionToken := uuid.NewString()

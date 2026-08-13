@@ -21,6 +21,7 @@ type AlertEventReaper struct {
 	repo     *repository.AlertEventRepo
 	interval time.Duration
 	age      time.Duration
+	health   workerHealth
 }
 
 func NewAlertEventReaper(repo *repository.AlertEventRepo) *AlertEventReaper {
@@ -31,7 +32,9 @@ func (r *AlertEventReaper) Start(ctx context.Context) {
 	if r == nil || r.repo == nil {
 		return
 	}
+	r.health.markStarted()
 	go func() {
+		defer r.health.markStopped()
 		ticker := time.NewTicker(r.interval)
 		defer ticker.Stop()
 		r.reap(ctx)
@@ -47,6 +50,7 @@ func (r *AlertEventReaper) Start(ctx context.Context) {
 }
 
 func (r *AlertEventReaper) reap(ctx context.Context) {
+	r.health.markTick()
 	reapCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	count, err := r.repo.ReapOrphanReservations(reapCtx, r.age)
@@ -59,3 +63,5 @@ func (r *AlertEventReaper) reap(ctx context.Context) {
 		g.Log().Infof(reapCtx, "AlertEventReaper removed orphan reservations: %d", count)
 	}
 }
+
+func (r *AlertEventReaper) Ready() bool { return r.health.ready(2 * r.interval) }

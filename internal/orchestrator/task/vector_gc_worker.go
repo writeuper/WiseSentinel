@@ -50,6 +50,7 @@ type VectorGCWorker struct {
 	pollPeriod time.Duration
 	leaseTTL   time.Duration
 	runTimeout time.Duration
+	health     workerHealth
 }
 
 func NewVectorGCWorker(tasks *repository.VectorGCRepo, safety *repository.DocumentIndexStateRepo, vectors *indexer.MilvusIndexer) *VectorGCWorker {
@@ -61,7 +62,9 @@ func newVectorGCWorker(tasks vectorGCTaskStore, safety vectorGCSafetyGate, vecto
 }
 
 func (w *VectorGCWorker) Start(ctx context.Context) {
+	w.health.markStarted()
 	go func() {
+		defer w.health.markStopped()
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				g.Log().Errorf(ctx, "VectorGCWorker panic recovered: %v", recovered)
@@ -83,6 +86,7 @@ func (w *VectorGCWorker) Start(ctx context.Context) {
 }
 
 func (w *VectorGCWorker) tick(parent context.Context) {
+	w.health.markTick()
 	ctx, cancel := context.WithTimeout(parent, w.runTimeout)
 	defer cancel()
 	tasks, err := w.tasks.ListRunnable(ctx, 10, time.Now())
@@ -105,6 +109,8 @@ func (w *VectorGCWorker) tick(parent context.Context) {
 		w.dispatch(ctx, task)
 	}
 }
+
+func (w *VectorGCWorker) Ready() bool { return w.health.ready(2 * w.pollPeriod) }
 
 func (w *VectorGCWorker) dispatch(parent context.Context, candidate *repository.VectorGCTask) {
 	if candidate == nil {
