@@ -208,20 +208,22 @@ def fetch_metrics(url: str) -> dict[str, Any]:
 
 
 def aggregate() -> dict[str, Any]:
-    # A non-null finished_at is the durable terminal marker. Treat every
-    # finished non-success status as terminal failure so adding a new terminal
-    # state cannot silently drop it from the latency denominator.
+    # A non-null finished_at is the durable terminal marker. `abandoned` is a
+    # recovery/observability terminal state, not a business execution failure;
+    # report it separately so stale-process cleanup cannot inflate failure rate.
     traces = mysql_query("""
       SELECT COUNT(*), COALESCE(SUM(CASE WHEN status IN ('success','completed') THEN 1 ELSE 0 END),0),
-             COALESCE(SUM(CASE WHEN status NOT IN ('success','completed') THEN 1 ELSE 0 END),0),
+             COALESCE(SUM(CASE WHEN status NOT IN ('success','completed','abandoned') THEN 1 ELSE 0 END),0),
+             COALESCE(SUM(CASE WHEN status = 'abandoned' THEN 1 ELSE 0 END),0),
              COALESCE(AVG(CASE WHEN status IN ('success','completed') THEN latency_ms END),0),
-             COALESCE(AVG(CASE WHEN status NOT IN ('success','completed') THEN latency_ms END),0)
+             COALESCE(AVG(CASE WHEN status NOT IN ('success','completed','abandoned') THEN latency_ms END),0),
+             COALESCE(AVG(CASE WHEN status = 'abandoned' THEN latency_ms END),0)
       FROM ws_agent_trace WHERE finished_at IS NOT NULL
     """)[0]
     latency_by_agent = mysql_query("""
       SELECT agent_type, COUNT(*),
              COALESCE(AVG(CASE WHEN status IN ('success','completed') THEN latency_ms END),0),
-             COALESCE(AVG(CASE WHEN status NOT IN ('success','completed') THEN latency_ms END),0),
+             COALESCE(AVG(CASE WHEN status NOT IN ('success','completed','abandoned') THEN latency_ms END),0),
              COALESCE(AVG(latency_ms),0)
       FROM ws_agent_trace WHERE finished_at IS NOT NULL
       GROUP BY agent_type ORDER BY agent_type
@@ -260,9 +262,12 @@ def aggregate() -> dict[str, Any]:
     result: dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "trace": {"completed_or_success": safe_int(traces[1]), "failed_or_terminal_error": safe_int(traces[2]),
-                   "finished": safe_int(traces[0]), "avg_latency_ms_success": round(safe_float(traces[3]), 2),
-                   "avg_latency_ms_failed": round(safe_float(traces[4]), 2),
-                   "avg_latency_ms_all": round((safe_float(traces[3]) * safe_int(traces[1]) + safe_float(traces[4]) * safe_int(traces[2])) / max(1, safe_int(traces[1]) + safe_int(traces[2])), 2)},
+                   "abandoned": safe_int(traces[3]),
+                   "finished": safe_int(traces[0]), "avg_latency_ms_success": round(safe_float(traces[4]), 2),
+                   "avg_latency_ms_failed": round(safe_float(traces[5]), 2),
+                   "avg_latency_ms_abandoned": round(safe_float(traces[6]), 2),
+                   "avg_latency_ms_business_terminal": round((safe_float(traces[4]) * safe_int(traces[1]) + safe_float(traces[5]) * safe_int(traces[2])) / max(1, safe_int(traces[1]) + safe_int(traces[2])), 2),
+                   "avg_latency_ms_all": round((safe_float(traces[4]) * safe_int(traces[1]) + safe_float(traces[5]) * safe_int(traces[2]) + safe_float(traces[6]) * safe_int(traces[3])) / max(1, safe_int(traces[1]) + safe_int(traces[2]) + safe_int(traces[3])), 2)},
         "steps": {"finished_traces": safe_int(steps[0]), "traces_with_steps": safe_int(steps[0]), "avg_per_trace": round(safe_float(steps[1]), 3),
                    "min": safe_int(steps[2]), "max": safe_int(steps[3])},
         "by_agent_type": [{"agent_type": row[0], "traces": safe_int(row[1]), "avg_steps": round(safe_float(row[2]), 3)} for row in by_agent],
@@ -294,8 +299,10 @@ def main() -> int:
         print("# Agent Quality Aggregate Report\n")
         print(f"- Generated (UTC): {report['generated_at']}")
         print(f"- Finished traces: {report['trace']['finished']}")
+        print(f"- Abandoned traces: {report['trace']['abandoned']}")
         print(f"- Average Agent latency (success): {report['trace']['avg_latency_ms_success']} ms")
         print(f"- Average Agent latency (all finished): {report['trace']['avg_latency_ms_all']} ms")
+        print(f"- Average Agent latency (business terminal): {report['trace']['avg_latency_ms_business_terminal']} ms")
         print(f"- Average Agent steps/trace: {report['steps']['avg_per_trace']}")
         print(f"- Tool success rate: {report['tool_calls']['success_rate'] if report['tool_calls']['success_rate'] is not None else 'N/A'}%")
         for tool in report["tool_calls"]["by_tool"]:
