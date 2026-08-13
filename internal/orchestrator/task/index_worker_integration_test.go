@@ -4,6 +4,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -17,6 +18,77 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
+
+type retryingIndexExecutor struct {
+	repo  *repository.IndexTaskRepo
+	count int
+}
+
+func (e *retryingIndexExecutor) ExecuteIndexTask(ctx context.Context, tenantID, taskID, token string) error {
+	e.count++
+	if e.count == 1 {
+		return errors.New("milvus rpc DeadlineExceeded")
+	}
+	_, err := e.repo.MarkFinishedIfOwned(ctx, tenantID, taskID, token, string(domain.IndexTaskSuccess), 1, "")
+	return err
+}
+
+func TestIndexWorkerRetriesTransientFailureAndThenSucceedsIntegration(t *testing.T) {
+	dsn := os.Getenv("OPS_TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("OPS_TEST_MYSQL_DSN is not configured")
+	}
+	gdb.SetConfigGroup("default", gdb.ConfigGroup{gdb.ConfigNode{Link: dsn}})
+	ctx := context.Background()
+	tenantID, taskID := "index-retry-worker-"+uuid.NewString(), "task-"+uuid.NewString()
+	repo := repository.NewIndexTaskRepo()
+	t.Cleanup(func() { _, _ = g.DB().Ctx(ctx).Model("ws_index_task").Where("tenant_id", tenantID).Delete() })
+	if err := repo.Create(ctx, &repository.IndexTaskRecord{TenantID: tenantID, TaskID: taskID, DocID: "doc-" + uuid.NewString(), SourceURI: "retry.md", Visibility: "tenant", SecretLevel: 1, Layer: domain.KnowledgeLayerStatic, Status: string(domain.IndexTaskPending), MaxAttempts: 3}); err != nil {
+		t.Fatal(err)
+	}
+	executor := &retryingIndexExecutor{repo: repo}
+	worker := NewIndexWorker(repo, nil, executor)
+	first, err := repo.Get(ctx, tenantID, taskID)
+	if err != nil || first == nil {
+		t.Fatalf("get initial task: %#v, %v", first, err)
+	}
+	worker.dispatch(ctx, first)
+	deadline := time.Now().Add(5 * time.Second)
+	var retry *repository.IndexTaskRecord
+	for time.Now().Before(deadline) {
+		retry, err = repo.Get(ctx, tenantID, taskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if retry != nil && retry.Status == string(domain.IndexTaskRetryWait) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if retry == nil || retry.Status != string(domain.IndexTaskRetryWait) || retry.AttemptCount != 1 || retry.NextAttemptAt == nil {
+		t.Fatalf("after transient failure = %#v, want retry_wait attempt 1", retry)
+	}
+	// Make the durable retry runnable immediately for a deterministic test.
+	if _, err := g.DB().Ctx(ctx).Model("ws_index_task").Where("tenant_id", tenantID).Where("task_id", taskID).Data(g.Map{"next_attempt_at": time.Now().Add(-time.Second)}).Update(); err != nil {
+		t.Fatal(err)
+	}
+	retry, _ = repo.Get(ctx, tenantID, taskID)
+	worker.dispatch(ctx, retry)
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		retry, err = repo.Get(ctx, tenantID, taskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if retry != nil && retry.Status == string(domain.IndexTaskSuccess) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if retry == nil || retry.Status != string(domain.IndexTaskSuccess) || executor.count != 2 {
+		t.Fatalf("after retry = %#v executor_count=%d, want success/2", retry, executor.count)
+	}
+}
 
 func TestIndexLeaseDoesNotReleaseAnotherOwnerIntegration(t *testing.T) {
 	addr := os.Getenv("OPS_TEST_REDIS_ADDR")
