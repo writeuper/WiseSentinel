@@ -452,17 +452,30 @@ def write_results(path: Path, fieldnames: List[str], rows: List[Dict[str, str]])
 def build_metrics(rows: List[Dict[str, str]]) -> Dict[str, Any]:
     executable = [row for row in rows if row.get("actual_route") != "skipped"]
     passed = [row for row in executable if row.get("passed") == "Y"]
+    # Keep platform execution failures out of the Agent-behavior denominator.
+    # A 429/504/HTTP failure proves a capacity or dependency problem, not a
+    # route/tool/Citation assertion failure. Report both views so an evaluation
+    # cannot hide availability regressions or mislabel them as model quality.
+    infrastructure_failures = {"rate_limited", "timeout", "http_error"}
+    business_rows = [row for row in executable if row.get("bad_case") not in infrastructure_failures]
+    business_passed = [row for row in business_rows if row.get("passed") == "Y"]
     route_ok = [row for row in executable if row.get("actual_route") == row.get("expected_route")]
     tool_hit = tool_total = keyword_hit = keyword_total = 0
+    business_tool_hit = business_tool_total = business_keyword_hit = business_keyword_total = 0
     for row in executable:
         if row.get("tool_hit"):
             hit, total = row["tool_hit"].split("/", 1)
             tool_hit, tool_total = tool_hit + int(hit), tool_total + int(total)
+            if row in business_rows:
+                business_tool_hit, business_tool_total = business_tool_hit + int(hit), business_tool_total + int(total)
         if row.get("keyword_hit"):
             hit, separator, total = row["keyword_hit"].partition("/")
             if separator:
                 keyword_hit += int(hit)
                 keyword_total += int(total)
+                if row in business_rows:
+                    business_keyword_hit += int(hit)
+                    business_keyword_total += int(total)
     latencies = sorted(int(row.get("latency_ms") or 0) for row in executable)
     def percentile(percent: float) -> int | None:
         if not latencies:
@@ -474,13 +487,25 @@ def build_metrics(rows: List[Dict[str, str]]) -> Dict[str, Any]:
         "executed_cases": len(executable),
         "passed_cases": len(passed),
         "overall_pass_rate": len(passed) / len(executable) if executable else None,
+        "business_cases": len(business_rows),
+        "business_passed_cases": len(business_passed),
+        "business_pass_rate": len(business_passed) / len(business_rows) if business_rows else None,
+        "infrastructure_failure_cases": len(executable) - len(business_rows),
+        "infrastructure_failure_rate": (len(executable) - len(business_rows)) / len(executable) if executable else None,
         "route_accuracy": len(route_ok) / len(executable) if executable else None,
+        "business_route_accuracy": sum(1 for row in business_rows if row.get("actual_route") == row.get("expected_route")) / len(business_rows) if business_rows else None,
         "tool_success_rate": tool_hit / tool_total if tool_total else None,
         "tool_hits": tool_hit,
         "tool_total": tool_total,
+        "business_tool_success_rate": business_tool_hit / business_tool_total if business_tool_total else None,
+        "business_tool_hits": business_tool_hit,
+        "business_tool_total": business_tool_total,
         "keyword_hit_rate": keyword_hit / keyword_total if keyword_total else None,
         "keyword_hits": keyword_hit,
         "keyword_total": keyword_total,
+        "business_keyword_hit_rate": business_keyword_hit / business_keyword_total if business_keyword_total else None,
+        "business_keyword_hits": business_keyword_hit,
+        "business_keyword_total": business_keyword_total,
         "latency_ms": {"p50": percentile(0.50), "p95": percentile(0.95)},
         "bad_case_distribution": dict(Counter(row.get("bad_case") or "pass" for row in rows)),
     }
@@ -493,9 +518,14 @@ def print_metrics(metrics: Dict[str, Any]) -> None:
     print(f"total cases: {metrics['total_cases']}")
     print(f"executed cases: {metrics['executed_cases']}")
     print(f"overall pass rate: {pct(metrics['overall_pass_rate'])} ({metrics['passed_cases']}/{metrics['executed_cases']})")
+    print(f"business pass rate: {pct(metrics['business_pass_rate'])} ({metrics['business_passed_cases']}/{metrics['business_cases']})")
+    print(f"infrastructure failures: {pct(metrics['infrastructure_failure_rate'])} ({metrics['infrastructure_failure_cases']}/{metrics['executed_cases']})")
     print(f"route accuracy: {pct(metrics['route_accuracy'])}")
+    print(f"business route accuracy: {pct(metrics['business_route_accuracy'])}")
     print(f"tool success rate: {pct(metrics['tool_success_rate'])} ({metrics['tool_hits']}/{metrics['tool_total']})")
+    print(f"business tool success rate: {pct(metrics['business_tool_success_rate'])} ({metrics['business_tool_hits']}/{metrics['business_tool_total']})")
     print(f"keyword hit rate: {pct(metrics['keyword_hit_rate'])} ({metrics['keyword_hits']}/{metrics['keyword_total']})")
+    print(f"business keyword hit rate: {pct(metrics['business_keyword_hit_rate'])} ({metrics['business_keyword_hits']}/{metrics['business_keyword_total']})")
     print(f"latency: p50={metrics['latency_ms']['p50']}ms p95={metrics['latency_ms']['p95']}ms")
     print("bad case distribution:")
     for name, count in sorted(metrics["bad_case_distribution"].items(), key=lambda item: (-item[1], item[0])):

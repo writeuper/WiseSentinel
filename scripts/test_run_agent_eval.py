@@ -11,6 +11,21 @@ SPEC.loader.exec_module(MODULE)
 
 
 class EvalSessionCleanupTests(unittest.TestCase):
+    def test_metrics_separate_infrastructure_failures_from_agent_quality(self) -> None:
+        metrics = MODULE.build_metrics([
+            {"actual_route": "chat", "expected_route": "chat", "passed": "Y", "bad_case": "", "latency_ms": "100", "tool_hit": "1/1", "keyword_hit": "1/1"},
+            {"actual_route": "error", "expected_route": "chat", "passed": "N", "bad_case": "rate_limited", "latency_ms": "50", "tool_hit": "", "keyword_hit": ""},
+            {"actual_route": "ops", "expected_route": "ops", "passed": "N", "bad_case": "tool_missing", "latency_ms": "200", "tool_hit": "0/1", "keyword_hit": "0/1"},
+        ])
+        self.assertEqual(metrics["overall_pass_rate"], 1 / 3)
+        self.assertEqual(metrics["infrastructure_failure_cases"], 1)
+        self.assertEqual(metrics["business_cases"], 2)
+        self.assertEqual(metrics["business_passed_cases"], 1)
+        self.assertEqual(metrics["business_pass_rate"], 0.5)
+        self.assertEqual(metrics["business_route_accuracy"], 1.0)
+        self.assertEqual(metrics["business_tool_success_rate"], 0.5)
+        self.assertEqual(metrics["business_keyword_hit_rate"], 0.5)
+
     def test_classifies_business_model_timeout_as_timeout(self) -> None:
         self.assertEqual(
             MODULE.classify_failure(False, False, False, False, 'HTTP 504 http://local:8090/chat: {"code":50401,"message":"模型服务响应超时"}'),
