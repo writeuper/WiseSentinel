@@ -25,6 +25,32 @@ func TestModelMetricsUseOnlyBoundedLabels(t *testing.T) {
 	t.Fatal("bounded model metric labels not found")
 }
 
+func TestModelLatencyHistogramHasLongTailPrecisionBuckets(t *testing.T) {
+	families, err := Registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "ws_model_call_duration_seconds" {
+			continue
+		}
+		if len(family.Metric) == 0 || family.Metric[0].Histogram == nil {
+			t.Fatal("model latency histogram missing")
+		}
+		seen := map[float64]bool{}
+		for _, bucket := range family.Metric[0].Histogram.Bucket {
+			seen[bucket.GetUpperBound()] = true
+		}
+		for _, want := range []float64{3, 4, 6, 8, 12, 15, 18} {
+			if !seen[want] {
+				t.Errorf("model histogram missing long-tail bucket %v", want)
+			}
+		}
+		return
+	}
+	t.Fatal("model latency histogram family not found")
+}
+
 func TestModelAdmissionMetricsUseBoundedProviderAndBalanceInFlight(t *testing.T) {
 	release := ObserveModelAdmission("untrusted-provider-https://example.invalid/tenant-secret", true)
 	ObserveModelAdmission("untrusted-provider-https://example.invalid/tenant-secret", false)

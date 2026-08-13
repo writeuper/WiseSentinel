@@ -18,7 +18,7 @@ var (
 		prometheus.HistogramOpts{
 			Name:    "ws_model_call_duration_seconds",
 			Help:    "Model invocation phase latency by provider class, operation and outcome.",
-			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300},
+			Buckets: []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 18, 20, 30, 60, 120, 300},
 		},
 		[]string{"provider", "operation", "outcome"},
 	)
