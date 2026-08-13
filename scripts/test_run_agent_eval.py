@@ -11,6 +11,10 @@ SPEC.loader.exec_module(MODULE)
 
 
 class EvalSessionCleanupTests(unittest.TestCase):
+    def test_rate_limit_error_preserves_retry_after_hint(self) -> None:
+        error = MODULE.RateLimitError("limited", 60.0)
+        self.assertEqual(error.retry_after, 60.0)
+
     def test_metrics_separate_infrastructure_failures_from_agent_quality(self) -> None:
         metrics = MODULE.build_metrics([
             {"actual_route": "chat", "expected_route": "chat", "passed": "Y", "bad_case": "", "latency_ms": "100", "tool_hit": "1/1", "keyword_hit": "1/1"},

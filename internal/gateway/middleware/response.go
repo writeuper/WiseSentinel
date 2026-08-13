@@ -73,6 +73,11 @@ func isValidationError(err error) bool {
 // retryAfterSeconds exposes a bounded retry hint only for errors that are
 // explicitly safe to retry. It must not be inferred for write/approval paths.
 func retryAfterSeconds(code int) int {
+	if code == apperr.ErrRateLimited.Code {
+		// The Redis sliding window is one minute. A conservative bounded hint
+		// prevents clients from retrying repeatedly inside the same window.
+		return 60
+	}
 	if code == apperr.ErrModelOverloaded.Code {
 		return 2
 	}
@@ -81,6 +86,9 @@ func retryAfterSeconds(code int) int {
 
 func writeError(r *ghttp.Request, ae *apperr.AppError) {
 	r.Response.Status = ae.HTTP
+	if seconds := retryAfterSeconds(ae.Code); seconds > 0 {
+		r.Response.Header().Set("Retry-After", strconv.Itoa(seconds))
+	}
 	r.Response.WriteJson(response.Fail(ae.Code, ae.Message))
 }
 

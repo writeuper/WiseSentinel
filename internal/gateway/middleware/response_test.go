@@ -20,6 +20,9 @@ func TestIsValidationErrorRecognizesGoFrameValidationAndRejectsOtherErrors(t *te
 }
 
 func TestRetryAfterSecondsOnlyMarksExplicitlyRetryableOverload(t *testing.T) {
+	if got := retryAfterSeconds(apperr.ErrRateLimited.Code); got != 60 {
+		t.Fatalf("rate-limit retry-after = %d, want 60", got)
+	}
 	if got := retryAfterSeconds(apperr.ErrModelOverloaded.Code); got != 2 {
 		t.Fatalf("model overload retry-after = %d, want 2", got)
 	}

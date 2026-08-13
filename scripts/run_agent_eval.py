@@ -19,7 +19,9 @@ DEFAULT_OUTPUT = "docs/整理与提升/agent_eval_results.csv"
 
 
 class RateLimitError(RuntimeError):
-    pass
+    def __init__(self, message: str, retry_after: float | None = None):
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class EvalClient:
@@ -62,7 +64,12 @@ class EvalClient:
         except HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="ignore")
             if exc.code == 429:
-                raise RateLimitError(f"HTTP 429 {url}: {raw}") from exc
+                retry_after = None
+                try:
+                    retry_after = float(exc.headers.get("Retry-After", ""))
+                except (TypeError, ValueError):
+                    pass
+                raise RateLimitError(f"HTTP 429 {url}: {raw}", retry_after) from exc
             raise RuntimeError(f"HTTP {exc.code} {url}: {raw}") from exc
         except URLError as exc:
             raise RuntimeError(f"request failed {url}: {exc}") from exc
@@ -84,10 +91,11 @@ class EvalClient:
         for attempt in range(self.retry_429 + 1):
             try:
                 return self._request("POST", path, payload, tenant_id=tenant_id)
-            except RateLimitError:
+            except RateLimitError as exc:
                 if attempt >= self.retry_429:
                     raise
-                time.sleep(self.retry_backoff * (2 ** attempt))
+                backoff = self.retry_backoff * (2 ** attempt)
+                time.sleep(max(backoff, exc.retry_after or 0.0))
         raise RuntimeError("unreachable")
 
     def create_session(self, case_id: str, tenant_id: str | None = None) -> str:
@@ -125,10 +133,10 @@ class EvalClient:
         for attempt in range(self.retry_429 + 1):
             try:
                 return self._upload_knowledge_once(filename, content)
-            except RateLimitError:
+            except RateLimitError as exc:
                 if attempt >= self.retry_429:
                     raise
-                time.sleep(self.retry_backoff * (2 ** attempt))
+                time.sleep(max(self.retry_backoff * (2 ** attempt), exc.retry_after or 0.0))
         raise RuntimeError("unreachable")
 
     def _upload_knowledge_once(self, filename: str, content: str) -> Dict[str, Any]:
@@ -149,7 +157,12 @@ class EvalClient:
         except HTTPError as exc:
             raw = exc.read().decode("utf-8", errors="ignore")
             if exc.code == 429:
-                raise RateLimitError(f"HTTP 429 {url}: {raw}") from exc
+                retry_after = None
+                try:
+                    retry_after = float(exc.headers.get("Retry-After", ""))
+                except (TypeError, ValueError):
+                    pass
+                raise RateLimitError(f"HTTP 429 {url}: {raw}", retry_after) from exc
             raise RuntimeError(f"HTTP {exc.code} {url}: {raw}") from exc
         except URLError as exc:
             raise RuntimeError(f"request failed {url}: {exc}") from exc
@@ -165,10 +178,10 @@ class EvalClient:
         for attempt in range(self.retry_429 + 1):
             try:
                 return self._request("DELETE", f"/knowledge/documents/{doc_id}", tenant_id=self.knowledge_tenant_id)
-            except RateLimitError:
+            except RateLimitError as exc:
                 if attempt >= self.retry_429:
                     raise
-                time.sleep(self.retry_backoff * (2 ** attempt))
+                time.sleep(max(self.retry_backoff * (2 ** attempt), exc.retry_after or 0.0))
         raise RuntimeError("unreachable")
 
     def list_knowledge(self) -> Dict[str, Any]:
