@@ -11,6 +11,9 @@ SPEC.loader.exec_module(MODULE)
 
 
 class EvalSessionCleanupTests(unittest.TestCase):
+    def test_default_evaluation_input_is_frozen_enterprise_matrix(self) -> None:
+        self.assertEqual(MODULE.DEFAULT_INPUT, "docs/整理与提升/enterprise_agent_eval_cases_130.csv")
+
     def test_rate_limit_error_preserves_retry_after_hint(self) -> None:
         error = MODULE.RateLimitError("limited", 60.0)
         self.assertEqual(error.retry_after, 60.0)
