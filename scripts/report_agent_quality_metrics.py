@@ -87,11 +87,48 @@ def aggregate_tool_latency(rows: list[list[str]]) -> dict[str, Any]:
             "successes": len(success_values),
             "success_rate": round(len(success_values) / len(samples) * 100, 2) if samples else None,
             "mean_ms": round(sum(all_values) / len(all_values), 3) if all_values else None,
+            "zero_latency_samples": sum(1 for latency in all_values if latency == 0),
+            "zero_latency_rate": round(sum(1 for latency in all_values if latency == 0) / len(all_values) * 100, 2) if all_values else None,
             "p50_ms": percentile_ms(all_values, 0.50),
             "p95_ms": percentile_ms(all_values, 0.95),
             "success_p95_ms": percentile_ms(success_values, 0.95),
         })
     return {"tool_count": len(result), "by_tool": result}
+
+
+def aggregate_trace_latency(rows: list[list[str]]) -> dict[str, Any]:
+    """Aggregate durable Agent trace latency without exposing identifiers.
+
+    ``abandoned`` is a recovery terminal state and is reported separately from
+    business terminal outcomes. Invalid/negative samples are ignored rather
+    than allowing corrupted telemetry to change a percentile.
+    """
+    grouped: dict[str, list[float]] = defaultdict(list)
+    for row in rows:
+        if len(row) < 2:
+            continue
+        status = str(row[0] or "unknown")
+        try:
+            latency = float(row[1] or 0)
+        except ValueError:
+            continue
+        if latency < 0:
+            continue
+        grouped[status].append(latency)
+
+    success = [v for status, values in grouped.items() if status in {"success", "completed"} for v in values]
+    business = [v for status, values in grouped.items() if status not in {"abandoned"} for v in values]
+    all_values = [v for values in grouped.values() for v in values]
+
+    def summary(values: list[float]) -> dict[str, Any]:
+        return {
+            "samples": len(values),
+            "mean_ms": round(sum(values) / len(values), 3) if values else None,
+            "p50_ms": percentile_ms(values, 0.50),
+            "p95_ms": percentile_ms(values, 0.95),
+        }
+
+    return {"success": summary(success), "business_terminal": summary(business), "all_finished": summary(all_values)}
 
 
 def parse_prometheus(text: str) -> dict[str, Any]:
@@ -233,7 +270,8 @@ def aggregate() -> dict[str, Any]:
     # admission failure).  Joining only ws_agent_trace_step would both exclude
     # those zero-step traces and accidentally include unfinished traces.
     steps = mysql_query("""
-      SELECT COUNT(*), COALESCE(AVG(step_count),0), COALESCE(MIN(step_count),0), COALESCE(MAX(step_count),0)
+      SELECT COUNT(*), COALESCE(SUM(CASE WHEN step_count > 0 THEN 1 ELSE 0 END),0),
+             COALESCE(AVG(step_count),0), COALESCE(MIN(step_count),0), COALESCE(MAX(step_count),0)
       FROM (
         SELECT t.trace_id, COUNT(s.id) step_count
         FROM ws_agent_trace t
@@ -242,6 +280,11 @@ def aggregate() -> dict[str, Any]:
         GROUP BY t.trace_id
       ) s
     """)[0]
+    trace_latency_rows = mysql_query("""
+      SELECT status, latency_ms
+      FROM ws_agent_trace
+      WHERE finished_at IS NOT NULL AND latency_ms >= 0
+    """)
     by_agent = mysql_query("""
       SELECT agent_type, COUNT(*), COALESCE(AVG(step_count),0)
       FROM (SELECT t.agent_type, t.trace_id, COUNT(s.id) step_count
@@ -268,8 +311,9 @@ def aggregate() -> dict[str, Any]:
                    "avg_latency_ms_abandoned": round(safe_float(traces[6]), 2),
                    "avg_latency_ms_business_terminal": round((safe_float(traces[4]) * safe_int(traces[1]) + safe_float(traces[5]) * safe_int(traces[2])) / max(1, safe_int(traces[1]) + safe_int(traces[2])), 2),
                    "avg_latency_ms_all": round((safe_float(traces[4]) * safe_int(traces[1]) + safe_float(traces[5]) * safe_int(traces[2]) + safe_float(traces[6]) * safe_int(traces[3])) / max(1, safe_int(traces[1]) + safe_int(traces[2]) + safe_int(traces[3])), 2)},
-        "steps": {"finished_traces": safe_int(steps[0]), "traces_with_steps": safe_int(steps[0]), "avg_per_trace": round(safe_float(steps[1]), 3),
-                   "min": safe_int(steps[2]), "max": safe_int(steps[3])},
+        "steps": {"finished_traces": safe_int(steps[0]), "traces_with_steps": safe_int(steps[1]), "avg_per_trace": round(safe_float(steps[2]), 3),
+                   "min": safe_int(steps[3]), "max": safe_int(steps[4])},
+        "trace_latency": aggregate_trace_latency(trace_latency_rows),
         "by_agent_type": [{"agent_type": row[0], "traces": safe_int(row[1]), "avg_steps": round(safe_float(row[2]), 3)} for row in by_agent],
         "latency_by_agent_type": [{"agent_type": row[0], "traces": safe_int(row[1]),
                                     "avg_latency_ms_success": round(safe_float(row[2]), 2),
@@ -303,10 +347,14 @@ def main() -> int:
         print(f"- Average Agent latency (success): {report['trace']['avg_latency_ms_success']} ms")
         print(f"- Average Agent latency (all finished): {report['trace']['avg_latency_ms_all']} ms")
         print(f"- Average Agent latency (business terminal): {report['trace']['avg_latency_ms_business_terminal']} ms")
+        for label, key in (("success", "success"), ("business terminal", "business_terminal"), ("all finished", "all_finished")):
+            latency = report["trace_latency"][key]
+            print(f"- Agent latency {label}: samples={latency['samples']}, p50={latency['p50_ms'] if latency['p50_ms'] is not None else 'N/A'} ms, p95={latency['p95_ms'] if latency['p95_ms'] is not None else 'N/A'} ms")
         print(f"- Average Agent steps/trace: {report['steps']['avg_per_trace']}")
         print(f"- Tool success rate: {report['tool_calls']['success_rate'] if report['tool_calls']['success_rate'] is not None else 'N/A'}%")
         for tool in report["tool_calls"]["by_tool"]:
-            print(f"- Tool {tool['tool_name']}: calls={tool['calls']}, success_rate={tool['success_rate']}%, p50={tool['p50_ms']} ms, p95={tool['p95_ms']} ms, success_p95={tool['success_p95_ms']} ms")
+            zero_note = f", zero_latency={tool['zero_latency_samples']} ({tool['zero_latency_rate']}%)" if tool["zero_latency_samples"] else ""
+            print(f"- Tool {tool['tool_name']}: calls={tool['calls']}, success_rate={tool['success_rate']}%, p50={tool['p50_ms']} ms, p95={tool['p95_ms']} ms, success_p95={tool['success_p95_ms']} ms{zero_note}")
         rag = report["rag_retrieval"]
         print(f"- RAG retrieval samples: {rag['sample_count']}")
         print(f"- RAG successful samples: {rag.get('success_sample_count', 0)}")

@@ -82,8 +82,25 @@ ws_model_call_duration_seconds_count{operation="generate",outcome="timeout",prov
         self.assertEqual(logs["calls"], 3)
         self.assertEqual(logs["successes"], 2)
         self.assertEqual(logs["success_rate"], 66.67)
+        self.assertEqual(logs["zero_latency_samples"], 0)
         self.assertEqual(logs["p50_ms"], 200.0)
         self.assertEqual(logs["p95_ms"], 900.0)
+
+    def test_aggregate_trace_latency_separates_abandoned_and_reports_percentiles(self):
+        report = MODULE.aggregate_trace_latency([
+            ["success", "100"], ["success", "200"], ["failed", "900"],
+            ["abandoned", "5000"], ["invalid", "-1"], ["success", "bad"],
+        ])
+        self.assertEqual(report["success"]["samples"], 2)
+        self.assertEqual(report["success"]["p50_ms"], 100.0)
+        self.assertEqual(report["success"]["p95_ms"], 200.0)
+        self.assertEqual(report["business_terminal"]["samples"], 3)
+        self.assertEqual(report["all_finished"]["samples"], 4)
+
+    def test_tool_latency_reports_zero_sample_quality_signal(self):
+        report = MODULE.aggregate_tool_latency([["fast", "success", "0"], ["fast", "error", "2"]])
+        self.assertEqual(report["by_tool"][0]["zero_latency_samples"], 1)
+        self.assertEqual(report["by_tool"][0]["zero_latency_rate"], 50.0)
 
 
 if __name__ == "__main__":
