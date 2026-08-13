@@ -1,9 +1,11 @@
 package middleware
 
 import (
+	"context"
 	"strings"
 	"time"
 
+	"wisesentinel-platform/internal/observability"
 	"wisesentinel-platform/internal/pkg/ctxkeys"
 
 	"github.com/gogf/gf/v2/frame/g"
@@ -28,7 +30,13 @@ func Audit(r *ghttp.Request) {
 	if len(resourceID) > 255 {
 		resourceID = resourceID[:255]
 	}
-	_, err := g.DB().Insert(r.Context(), "ws_audit_log", g.Map{
+	// Handler work may cancel the request context on client disconnect or model
+	// timeout. Audit is a durable after-request obligation, so preserve the
+	// request-scoped identity values but detach the DB write from cancellation
+	// and impose a short bounded deadline.
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)
+	defer cancel()
+	_, err := g.DB().Insert(auditCtx, "ws_audit_log", g.Map{
 		"tenant_id":     ctxkeys.TenantIDFrom(r.Context()),
 		"trace_id":      ctxkeys.TraceIDFrom(r.Context()),
 		"user_id":       ctxkeys.UserIDFrom(r.Context()),
@@ -39,7 +47,12 @@ func Audit(r *ghttp.Request) {
 		"latency_ms":    time.Since(start).Milliseconds(),
 	})
 	if err != nil {
-		g.Log().Warningf(r.Context(), "audit log insert failed: %v", err)
+		reason := "database"
+		if auditCtx.Err() == context.DeadlineExceeded || r.Context().Err() != nil {
+			reason = "context_canceled"
+		}
+		observability.ObserveAuditWriteFailure(reason)
+		g.Log().Warningf(auditCtx, "audit log insert failed: %v", err)
 	}
 }
 
