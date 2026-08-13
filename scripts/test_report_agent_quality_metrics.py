@@ -48,6 +48,17 @@ ws_rag_retrieval_duration_seconds_count{outcome="error",confidence="low"} 2
         self.assertEqual(report["sample_count"], 0)
         self.assertIsNone(report["success_p95_ms"])
 
+    def test_parse_rag_inventory_reads_only_global_gauges(self):
+        report = MODULE.parse_rag_inventory("""
+# HELP ws_rag_active_documents test
+ws_rag_active_documents 24
+ws_rag_active_published_chunks 78
+ws_rag_active_legacy_documents 11
+ws_rag_physical_vectors 199
+""")
+        self.assertEqual(report, {"active_documents": 24, "active_published_chunks": 78,
+                                  "active_legacy_documents": 11, "physical_vectors": 199})
+
     def test_parse_model_histogram_separates_success_and_timeout(self):
         text = """
 ws_model_call_duration_seconds_bucket{operation="generate",outcome="success",provider="openai",le="5"} 2

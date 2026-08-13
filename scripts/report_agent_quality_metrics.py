@@ -181,6 +181,33 @@ def parse_prometheus(text: str) -> dict[str, Any]:
     }
 
 
+def parse_rag_inventory(text: str) -> dict[str, int | None]:
+    """Read aggregate RAG inventory gauges without tenant/document labels."""
+    names = (
+        "ws_rag_active_documents",
+        "ws_rag_active_published_chunks",
+        "ws_rag_active_legacy_documents",
+        "ws_rag_physical_vectors",
+    )
+    values: dict[str, int | None] = {name: None for name in names}
+    for line in text.splitlines():
+        if line.startswith("#"):
+            continue
+        for name in names:
+            if line.startswith(name + " "):
+                raw = line.rsplit(" ", 1)[-1]
+                try:
+                    values[name] = int(float(raw))
+                except ValueError:
+                    pass
+    return {
+        "active_documents": values["ws_rag_active_documents"],
+        "active_published_chunks": values["ws_rag_active_published_chunks"],
+        "active_legacy_documents": values["ws_rag_active_legacy_documents"],
+        "physical_vectors": values["ws_rag_physical_vectors"],
+    }
+
+
 def parse_model_prometheus(text: str) -> dict[str, Any]:
     """Aggregate model generation latency without exposing provider details.
 
@@ -323,6 +350,7 @@ def aggregate() -> dict[str, Any]:
                         "success_rate": round(safe_int(tools[1]) / safe_int(tools[0]) * 100, 2) if safe_int(tools[0]) else None,
                         **aggregate_tool_latency(tool_latency_rows)},
         "rag_retrieval": parse_prometheus(metrics_text) if metrics_text else fetch_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics")),
+        "rag_inventory": parse_rag_inventory(metrics_text),
         "model_generation": parse_model_prometheus(metrics_text),
     }
     return result
@@ -356,6 +384,8 @@ def main() -> int:
             zero_note = f", zero_latency={tool['zero_latency_samples']} ({tool['zero_latency_rate']}%)" if tool["zero_latency_samples"] else ""
             print(f"- Tool {tool['tool_name']}: calls={tool['calls']}, success_rate={tool['success_rate']}%, p50={tool['p50_ms']} ms, p95={tool['p95_ms']} ms, success_p95={tool['success_p95_ms']} ms{zero_note}")
         rag = report["rag_retrieval"]
+        inventory = report["rag_inventory"]
+        print(f"- RAG inventory: active_documents={inventory['active_documents'] if inventory['active_documents'] is not None else 'N/A'}, published_chunks={inventory['active_published_chunks'] if inventory['active_published_chunks'] is not None else 'N/A'}, legacy_documents={inventory['active_legacy_documents'] if inventory['active_legacy_documents'] is not None else 'N/A'}, physical_vectors={inventory['physical_vectors'] if inventory['physical_vectors'] is not None else 'N/A'}")
         print(f"- RAG retrieval samples: {rag['sample_count']}")
         print(f"- RAG successful samples: {rag.get('success_sample_count', 0)}")
         print(f"- RAG error samples: {rag.get('error_sample_count', 0)}")
