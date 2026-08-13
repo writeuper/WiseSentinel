@@ -142,6 +142,11 @@ func Init(ctx context.Context) (*App, error) {
 	// dedicated intent/outbox executor is available.
 	approvalRepo := repository.NewApprovalRepo()
 	traceRepo := repository.NewAgentTraceRepo()
+	if reaped, reapErr := traceRepo.ReapStaleRunning(ctx, 10*time.Minute); reapErr != nil {
+		g.Log().Warning(ctx, "stale Agent Trace reap failed:", reapErr)
+	} else if reaped > 0 {
+		g.Log().Infof(ctx, "reaped stale Agent Traces: %d", reaped)
+	}
 	faultKnowledgeRepo := repository.NewFaultKnowledgeRepo()
 	toolCallRecordRepo := repository.NewToolCallRecordRepo()
 	feedbackRepo := repository.NewFeedbackRepo()

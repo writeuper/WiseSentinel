@@ -794,7 +794,13 @@ func (a *Agent) finishTrace(ctx context.Context, traceID, status, errMsg string,
 	if a.traceRepo == nil {
 		return
 	}
-	_ = a.traceRepo.Finish(ctx, traceID, status, errMsg, latencyMS)
+	// Stream cancellation and model timeout can cancel the request context
+	// before the deferred terminal write runs. Preserve trace identity values
+	// but detach persistence from that cancellation so a running Trace cannot be
+	// stranded forever and distort completion/latency aggregates.
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	_ = a.traceRepo.Finish(persistCtx, traceID, status, errMsg, latencyMS)
 }
 
 func (a *Agent) recordStep(ctx context.Context, traceID string, req *domain.ChatAgentRequest, stepType, stepName, input, output, status string, latencyMS int64, errMsg string) {

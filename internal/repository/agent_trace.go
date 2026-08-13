@@ -57,6 +57,28 @@ func optionalTelemetryProjection(value string) string {
 
 func NewAgentTraceRepo() *AgentTraceRepo { return &AgentTraceRepo{} }
 
+// ReapStaleRunning closes traces left behind by a process crash or a pre-fix
+// canceled stream. Only traces older than the supplied age are touched, so a
+// live request cannot be mistaken for an abandoned one.
+func (r *AgentTraceRepo) ReapStaleRunning(ctx context.Context, age time.Duration) (int64, error) {
+	if age <= 0 {
+		age = 10 * time.Minute
+	}
+	cutoff := time.Now().Add(-age)
+	result, err := g.DB().Model("ws_agent_trace").Ctx(ctx).
+		Where("status", "running").
+		WhereLT("started_at", cutoff).
+		Data(g.Map{
+			"status":      "abandoned",
+			"error_msg":   optionalTelemetryProjection("trace abandoned after stale running timeout"),
+			"finished_at": time.Now(),
+		}).Update()
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func (r *AgentTraceRepo) Start(ctx context.Context, trace *AgentTrace) error {
 	_, err := g.DB().InsertIgnore(ctx, "ws_agent_trace", g.Map{
 		"trace_id":   trace.TraceID,

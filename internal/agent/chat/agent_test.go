@@ -25,6 +25,19 @@ func TestIsModelOverloadedErrorRecognizesTypedAndEinoFormattedError(t *testing.T
 	}
 }
 
+func TestTracePersistenceContextSurvivesStreamCancellation(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.WithValue(context.Background(), "trace", "trace-1"))
+	cancelParent()
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), 2*time.Second)
+	defer cancel()
+	if persistCtx.Err() != nil {
+		t.Fatalf("trace persistence context canceled: %v", persistCtx.Err())
+	}
+	if got := persistCtx.Value("trace"); got != "trace-1" {
+		t.Fatalf("trace context value = %v, want trace-1", got)
+	}
+}
+
 func TestPlatformRoleQueryUsesAuditableStaticCapabilityAnswer(t *testing.T) {
 	if !isPlatformRoleQuery("平台支持哪些 Agent 角色协作") {
 		t.Fatal("role collaboration query was not recognized")
