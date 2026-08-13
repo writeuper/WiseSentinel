@@ -59,8 +59,14 @@ func (r *MilvusRetriever) SetActiveGenerationResolver(resolver ActiveGenerationR
 // Retrieve searches Milvus, normalizes scores, enriches metadata, and computes
 // a coarse-grained confidence level used by the orchestrator for path routing.
 func (r *MilvusRetriever) Retrieve(ctx context.Context, req *domain.RetrieveRequest) (*domain.RetrieveResponse, error) {
-	if r.milvus == nil {
+	if req == nil {
+		return nil, fmt.Errorf("retrieve request is nil")
+	}
+	if r == nil || r.milvus == nil {
 		return nil, fmt.Errorf("milvus client is nil")
+	}
+	if r.embedder == nil {
+		return nil, fmt.Errorf("embedding provider is nil")
 	}
 	if req.Query == "" {
 		return &domain.RetrieveResponse{Confidence: domain.ConfidenceLow}, nil

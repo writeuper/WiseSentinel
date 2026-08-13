@@ -1,11 +1,26 @@
 package retriever
 
 import (
+	"context"
 	"math"
 	"testing"
 
 	"wisesentinel-platform/internal/domain"
 )
+
+func TestRetrieveRejectsNilRequestBeforeDependencyAccess(t *testing.T) {
+	var retriever *MilvusRetriever
+	if _, err := retriever.Retrieve(context.Background(), nil); err == nil {
+		t.Fatal("nil retrieve request must return an error")
+	}
+}
+
+func TestRetrieveRejectsMissingEmbedder(t *testing.T) {
+	retriever := &MilvusRetriever{}
+	if _, err := retriever.Retrieve(context.Background(), &domain.RetrieveRequest{Query: "health"}); err == nil {
+		t.Fatal("missing embedding provider must return an error")
+	}
+}
 
 func TestNormalizeL2Score(t *testing.T) {
 	cases := []struct {

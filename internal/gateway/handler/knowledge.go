@@ -54,7 +54,7 @@ func (c *ControllerV1) UploadDocument(ctx context.Context, req *v1.UploadDocumen
 	}
 	defer reader.Close()
 
-	content, err := io.ReadAll(reader)
+	content, err := readBoundedUpload(reader, maxUploadBytes)
 	if err != nil {
 		return nil, apperr.Wrap(err, apperr.ErrBadRequest)
 	}
@@ -112,6 +112,20 @@ func (c *ControllerV1) UploadDocument(ctx context.Context, req *v1.UploadDocumen
 		FileSize: int64(len(content)),
 		Status:   string(domain.IndexTaskPending),
 	}, nil
+}
+
+func readBoundedUpload(reader io.Reader, maxBytes int64) ([]byte, error) {
+	if reader == nil || maxBytes <= 0 {
+		return nil, fmt.Errorf("invalid upload reader or limit")
+	}
+	content, err := io.ReadAll(io.LimitReader(reader, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(content)) > maxBytes {
+		return nil, fmt.Errorf("文件大小不能超过 %d 字节", maxBytes)
+	}
+	return content, nil
 }
 
 // ListDocuments returns paginated knowledge documents.
