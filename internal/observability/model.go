@@ -44,10 +44,24 @@ var (
 		},
 		[]string{"provider", "outcome"},
 	)
+	modelBreakerEvents = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ws_model_breaker_events_total",
+			Help: "Model circuit-breaker events by bounded provider and event.",
+		},
+		[]string{"provider", "event"},
+	)
 )
 
 func init() {
-	Registry.MustRegister(modelCalls, modelCallDuration, modelAdmissionInFlight, modelAdmissionRejected, modelAdmissionWait)
+	Registry.MustRegister(modelCalls, modelCallDuration, modelAdmissionInFlight, modelAdmissionRejected, modelAdmissionWait, modelBreakerEvents)
+}
+
+func ObserveModelBreakerEvent(provider, event string) {
+	if event != "open" && event != "rejected" && event != "probe" && event != "closed" {
+		event = "rejected"
+	}
+	modelBreakerEvents.WithLabelValues(modelProviderClass(provider), event).Inc()
 }
 
 // ObserveModelAdmissionWait records only the local time spent deciding

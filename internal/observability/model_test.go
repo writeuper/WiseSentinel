@@ -70,3 +70,27 @@ func TestModelAdmissionOutcomeIsBounded(t *testing.T) {
 		}
 	}
 }
+
+func TestModelBreakerEventsUseBoundedLabels(t *testing.T) {
+	ObserveModelBreakerEvent("provider-with-secret", "open")
+	ObserveModelBreakerEvent("provider-with-secret", "unknown")
+	families, err := Registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "ws_model_breaker_events_total" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			labels := map[string]string{}
+			for _, label := range metric.Label {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if labels["provider"] == "other" && (labels["event"] == "open" || labels["event"] == "rejected") {
+				return
+			}
+		}
+	}
+	t.Fatal("bounded breaker metric labels not found")
+}

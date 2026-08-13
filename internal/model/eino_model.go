@@ -45,7 +45,10 @@ type modelRuntimeState struct {
 	failureCount   int
 	lastFailureAt  time.Time
 	breakerTripped bool
-	admission      chan struct{}
+	// breakerProbeInFlight fences the half-open transition to one probe. It
+	// prevents concurrent callers from all resetting the breaker together.
+	breakerProbeInFlight bool
+	admission            chan struct{}
 }
 
 const (
@@ -624,10 +627,10 @@ func convertToolsToOpenAI(tools []*schema.ToolInfo) []map[string]interface{} {
 // it allows a single probe request (half-open state).
 func (m *OpenAIEinoModel) checkBreaker() error {
 	state := m.runtimeState()
-	state.mu.RLock()
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	tripped := state.breakerTripped
 	lastFailure := state.lastFailureAt
-	state.mu.RUnlock()
 
 	if !tripped {
 		return nil
@@ -635,10 +638,12 @@ func (m *OpenAIEinoModel) checkBreaker() error {
 
 	// Half-open: allow a probe after the reset window
 	if time.Since(lastFailure) > breakerResetTime {
-		state.mu.Lock()
-		state.breakerTripped = false
-		state.failureCount = 0
-		state.mu.Unlock()
+		if state.breakerProbeInFlight {
+			observability.ObserveModelBreakerEvent(m.provider, "rejected")
+			return fmt.Errorf("LLM circuit breaker half-open probe already in flight")
+		}
+		state.breakerProbeInFlight = true
+		observability.ObserveModelBreakerEvent(m.provider, "probe")
 		return nil
 	}
 
@@ -653,6 +658,8 @@ func (m *OpenAIEinoModel) recordSuccess() {
 	defer state.mu.Unlock()
 	state.failureCount = 0
 	state.breakerTripped = false
+	state.breakerProbeInFlight = false
+	observability.ObserveModelBreakerEvent(m.provider, "closed")
 }
 
 // recordFailure increments the failure count and trips the breaker if
@@ -663,8 +670,10 @@ func (m *OpenAIEinoModel) recordFailure() {
 	defer state.mu.Unlock()
 	state.failureCount++
 	state.lastFailureAt = time.Now()
+	state.breakerProbeInFlight = false
 	if state.failureCount >= breakerThreshold {
 		state.breakerTripped = true
+		observability.ObserveModelBreakerEvent(m.provider, "open")
 	}
 }
 

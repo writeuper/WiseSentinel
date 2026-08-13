@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -85,6 +86,26 @@ func TestWithToolsSharesNonBlockingAdmissionState(t *testing.T) {
 	close(release)
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first Generate: %v", err)
+	}
+}
+
+func TestCircuitBreakerAllowsOnlyOneHalfOpenProbe(t *testing.T) {
+	m := NewOpenAIEinoModel("test", "test-model", "key", "http://localhost", time.Second)
+	state := m.runtimeState()
+	state.mu.Lock()
+	state.breakerTripped = true
+	state.failureCount = breakerThreshold
+	state.lastFailureAt = time.Now().Add(-breakerResetTime - time.Second)
+	state.mu.Unlock()
+	if err := m.checkBreaker(); err != nil {
+		t.Fatalf("first half-open probe rejected: %v", err)
+	}
+	if err := m.checkBreaker(); err == nil || !strings.Contains(err.Error(), "probe already in flight") {
+		t.Fatalf("second half-open probe error = %v", err)
+	}
+	m.recordSuccess()
+	if err := m.checkBreaker(); err != nil {
+		t.Fatalf("breaker did not close after successful probe: %v", err)
 	}
 }
 
