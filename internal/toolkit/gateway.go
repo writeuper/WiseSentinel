@@ -170,6 +170,12 @@ func (gw *Gateway) ListTools(ctx context.Context, tenantID string, agentType dom
 // Invoke calls a tool adapter with timeout and risk checks.
 func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*domain.ToolInvokeResponse, error) {
 	started := time.Now()
+	if req == nil {
+		// A malformed model/tool boundary request must be rejected as a normal
+		// client error, never panic while trying to build telemetry labels.
+		observability.ObserveToolCall("", "", "error", time.Since(started).Seconds())
+		return nil, apperr.ErrBadRequest
+	}
 	observe := func(outcome string) {
 		observability.ObserveToolCall(req.ToolName, string(req.AgentType), outcome, time.Since(started).Seconds())
 	}

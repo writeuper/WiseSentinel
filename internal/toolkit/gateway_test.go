@@ -73,6 +73,18 @@ func TestGatewayInvokeUnknownTool(t *testing.T) {
 	}
 }
 
+func TestGatewayInvokeNilRequestReturnsBadRequest(t *testing.T) {
+	ctx := ctxWithRoles(context.Background(), "operator")
+	gw := toolkit.NewGateway(ctx)
+	_, err := gw.Invoke(ctx, nil)
+	if err == nil {
+		t.Fatal("expected nil request to be rejected")
+	}
+	if !strings.Contains(err.Error(), "参数校验失败") {
+		t.Fatalf("expected bad-request error, got %v", err)
+	}
+}
+
 func TestGatewayInvokeGetCurrentTime(t *testing.T) {
 	ctx := ctxWithRoles(context.Background(), "operator")
 	gw := toolkit.NewGateway(ctx)
