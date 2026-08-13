@@ -232,6 +232,9 @@ func (c *ControllerV1) DeleteSession(ctx context.Context, req *v1.DeleteSessionR
 
 // Chat handles synchronous chat requests.
 func (c *ControllerV1) Chat(ctx context.Context, req *v1.ChatReq) (*v1.ChatRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	if err := validateBoundedText(req.Question, maxChatQuestionRunes); err != nil {
 		return nil, err
 	}
@@ -417,6 +420,9 @@ func validChatIdempotencyKey(key string) bool {
 
 // ChatStream handles SSE streaming chat.
 func (c *ControllerV1) ChatStream(ctx context.Context, req *v1.ChatStreamReq) (*v1.ChatStreamRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	if err := validateBoundedText(req.Question, maxChatQuestionRunes); err != nil {
 		return nil, err
 	}
@@ -594,6 +600,9 @@ func formatSSE(event, data string) string {
 
 // OpsAnalyze triggers alert analysis.
 func (c *ControllerV1) OpsAnalyze(ctx context.Context, req *v1.OpsAnalyzeReq) (*v1.OpsAnalyzeRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	if err := validateBoundedText(req.Query, maxOpsQueryRunes); err != nil {
 		return nil, err
 	}
@@ -699,11 +708,17 @@ func (c *ControllerV1) CurrentUser(ctx context.Context, _ *v1.CurrentUserReq) (*
 
 // AlertWebhook receives Alertmanager webhook events.
 func (c *ControllerV1) AlertWebhook(ctx context.Context, req *v1.AlertWebhookReq) (*v1.AlertWebhookRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	return c.handleAlertmanager(ctx, req.Receiver, req.Status, req.GroupKey, req.CommonLabels, req.CommonAnnotations, req.ExternalURL, req.Version, req.Alerts)
 }
 
 // AlertmanagerWebhook handles the signed internal Alertmanager endpoint.
 func (c *ControllerV1) AlertmanagerWebhook(ctx context.Context, req *v1.AlertmanagerWebhookReq) (*v1.AlertWebhookRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	return c.handleAlertmanager(ctx, req.Receiver, req.Status, req.GroupKey, req.CommonLabels, req.CommonAnnotations, req.ExternalURL, req.Version, req.Alerts)
 }
 
@@ -716,9 +731,8 @@ func (c *ControllerV1) handleAlertmanager(ctx context.Context, receiver, status,
 	if len(body) == 0 {
 		body = []byte(repository.MarshalAlertPayload(g.Map{"status": status, "alerts": alerts}))
 	}
-	eventID := strings.TrimSpace(hex.EncodeToString(sha256.New().Sum(body)))
 	hash := sha256.Sum256(body)
-	eventID = hex.EncodeToString(hash[:])
+	eventID := hex.EncodeToString(hash[:])
 	incidentKey := groupKey
 	if incidentKey == "" && len(alerts) > 0 {
 		incidentKey = alerts[0].Fingerprint

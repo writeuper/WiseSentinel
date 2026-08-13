@@ -222,6 +222,9 @@ func formatCurrentTimeAnswer(output string) string {
 }
 
 func (a *Agent) Invoke(ctx context.Context, req *domain.ChatAgentRequest) (*domain.ChatAgentResponse, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	ctx = ctxkeys.WithRequestQuery(ctx, req.Query)
 	traceID := ctxkeys.TraceIDFrom(ctx)
 	if traceID == "" {
@@ -316,6 +319,9 @@ func isModelOverloadedError(err error) bool {
 
 // Stream processes a streaming chat request and returns a StreamReader.
 func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domain.StreamReader, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	traceID := ctxkeys.TraceIDFrom(ctx)
 	if traceID == "" {
 		traceID = trace.NewID()

@@ -25,6 +25,16 @@ func TestIsModelOverloadedErrorRecognizesTypedAndEinoFormattedError(t *testing.T
 	}
 }
 
+func TestChatAgentRejectsNilRequests(t *testing.T) {
+	agent := NewAgent(nil, nil, nil)
+	if _, err := agent.Invoke(context.Background(), nil); !errors.Is(err, apperr.ErrBadRequest) {
+		t.Fatalf("Invoke(nil) error = %v, want bad request", err)
+	}
+	if _, err := agent.Stream(context.Background(), nil); !errors.Is(err, apperr.ErrBadRequest) {
+		t.Fatalf("Stream(nil) error = %v, want bad request", err)
+	}
+}
+
 func TestTracePersistenceContextSurvivesStreamCancellation(t *testing.T) {
 	parent, cancelParent := context.WithCancel(context.WithValue(context.Background(), "trace", "trace-1"))
 	cancelParent()

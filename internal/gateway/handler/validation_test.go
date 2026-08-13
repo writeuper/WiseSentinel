@@ -43,6 +43,26 @@ func TestHandlersRejectOversizedHighCostFieldsBeforeDependencies(t *testing.T) {
 	}
 }
 
+func TestHandlersRejectNilAgentRequests(t *testing.T) {
+	controller := NewV1(nil)
+	ctx := context.Background()
+	if _, err := controller.Chat(ctx, nil); err == nil {
+		t.Fatal("Chat(nil) should return bad request")
+	}
+	if _, err := controller.ChatStream(ctx, nil); err == nil {
+		t.Fatal("ChatStream(nil) should return bad request")
+	}
+	if _, err := controller.OpsAnalyze(ctx, nil); err == nil {
+		t.Fatal("OpsAnalyze(nil) should return bad request")
+	}
+	if _, err := controller.AlertWebhook(ctx, nil); err == nil {
+		t.Fatal("AlertWebhook(nil) should return bad request")
+	}
+	if _, err := controller.AlertmanagerWebhook(ctx, nil); err == nil {
+		t.Fatal("AlertmanagerWebhook(nil) should return bad request")
+	}
+}
+
 func TestRequestTextLimitsRejectOversizedPromptAndComment(t *testing.T) {
 	for name, value := range map[string]struct {
 		value string

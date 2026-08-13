@@ -65,6 +65,9 @@ func clarificationForQuery(query string) string {
 }
 
 func (a *Agent) Analyze(ctx context.Context, req *domain.OpsAgentRequest) (*domain.OpsAgentResponse, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	traceID := ctxkeys.TraceIDFrom(ctx)
 	if traceID == "" {
 		traceID = trace.NewID()
