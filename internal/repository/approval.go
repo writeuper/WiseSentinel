@@ -2,6 +2,8 @@ package repository
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"time"
 
 	"wisesentinel-platform/internal/pkg/redact"
@@ -54,6 +56,9 @@ func (r *ApprovalRepo) GetPending(ctx context.Context, tenantID, approvalID stri
 		Where("expired_at >", time.Now()).
 		Scan(&row)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	if row.ApprovalID == "" {

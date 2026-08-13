@@ -931,7 +931,10 @@ func (c *ControllerV1) ApprovalDecision(ctx context.Context, req *v1.ApprovalDec
 		}
 		approved, err := c.app.VectorGCRepo.ApproveRedrive(ctx, tenantID, req.ApprovalID, userID)
 		if err != nil {
-			return nil, apperr.Wrap(err, apperr.ErrBadRequest)
+			if strings.Contains(err.Error(), "different approver") {
+				return nil, apperr.New(40302, 403, "审批人不能与申请人相同")
+			}
+			return nil, apperr.New(40002, 400, "审批单不存在、目标不可重驱或审批参数无效")
 		}
 		if !approved {
 			return nil, apperr.New(40401, 404, "审批单不存在、已过期或死信任务已变化")
