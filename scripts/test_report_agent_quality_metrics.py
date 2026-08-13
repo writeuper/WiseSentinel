@@ -89,6 +89,25 @@ ws_model_breaker_events_total{event="unknown",provider="secret"} 99
 """)
         self.assertEqual(report, {"open": 5, "rejected": 5, "probe": 1, "closed": 1, "total": 12})
 
+    def test_parse_model_admission_reports_capacity_and_wait_signals(self):
+        report = MODULE.parse_model_admission("""
+ws_model_admission_rejections_total{provider="openai"} 4
+ws_model_admission_rejections_total{provider="other"} 1
+ws_model_admission_in_flight{provider="openai"} 2
+ws_model_admission_in_flight{provider="other"} 1
+ws_model_admission_wait_seconds_sum{provider="openai",outcome="accepted"} 0.006
+ws_model_admission_wait_seconds_count{provider="openai",outcome="accepted"} 3
+ws_model_admission_wait_seconds_sum{provider="openai",outcome="rejected"} 0.002
+ws_model_admission_wait_seconds_count{provider="openai",outcome="rejected"} 2
+""")
+        self.assertEqual(report["rejections"], 5)
+        self.assertEqual(report["in_flight"], 3)
+        self.assertEqual(report["wait_accepted_count"], 3)
+        self.assertEqual(report["wait_rejected_count"], 2)
+        self.assertEqual(report["rejection_rate"], 40.0)
+        self.assertEqual(report["mean_wait_accepted_ms"], 2.0)
+        self.assertEqual(report["mean_wait_rejected_ms"], 1.0)
+
     def test_aggregate_tool_latency_is_grouped_and_payload_free(self):
         report = MODULE.aggregate_tool_latency([
             ["search_logs", "success", "100"],

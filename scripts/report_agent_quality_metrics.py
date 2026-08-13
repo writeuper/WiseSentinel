@@ -266,6 +266,45 @@ def parse_breaker_events(text: str) -> dict[str, int]:
     return events
 
 
+def parse_model_admission(text: str) -> dict[str, Any]:
+    """Aggregate model admission capacity signals without provider labels."""
+    result: dict[str, Any] = {
+        "rejections": 0,
+        "in_flight": 0,
+        "wait_accepted_count": 0,
+        "wait_rejected_count": 0,
+        "wait_accepted_seconds": 0.0,
+        "wait_rejected_seconds": 0.0,
+    }
+    for line in text.splitlines():
+        if line.startswith("#"):
+            continue
+        try:
+            metric, raw = line.rsplit(" ", 1)
+            value = float(raw)
+        except (ValueError, TypeError):
+            continue
+        if metric.startswith("ws_model_admission_rejections_total{"):
+            result["rejections"] += int(value)
+        elif metric.startswith("ws_model_admission_in_flight{"):
+            result["in_flight"] += int(value)
+        elif metric.startswith("ws_model_admission_wait_seconds_count{"):
+            if 'outcome="accepted"' in metric:
+                result["wait_accepted_count"] += int(value)
+            elif 'outcome="rejected"' in metric:
+                result["wait_rejected_count"] += int(value)
+        elif metric.startswith("ws_model_admission_wait_seconds_sum{"):
+            if 'outcome="accepted"' in metric:
+                result["wait_accepted_seconds"] += value
+            elif 'outcome="rejected"' in metric:
+                result["wait_rejected_seconds"] += value
+    total_decisions = result["wait_accepted_count"] + result["wait_rejected_count"]
+    result["rejection_rate"] = round(result["wait_rejected_count"] / total_decisions * 100, 2) if total_decisions else None
+    result["mean_wait_accepted_ms"] = round(result["wait_accepted_seconds"] / result["wait_accepted_count"] * 1000, 3) if result["wait_accepted_count"] else None
+    result["mean_wait_rejected_ms"] = round(result["wait_rejected_seconds"] / result["wait_rejected_count"] * 1000, 3) if result["wait_rejected_count"] else None
+    return result
+
+
 def fetch_raw_metrics(url: str) -> str:
     try:
         with urllib.request.urlopen(url, timeout=10) as response:
@@ -366,6 +405,7 @@ def aggregate() -> dict[str, Any]:
         "rag_inventory": parse_rag_inventory(metrics_text),
         "model_generation": parse_model_prometheus(metrics_text),
         "model_breaker": parse_breaker_events(metrics_text),
+        "model_admission": parse_model_admission(metrics_text),
     }
     return result
 
@@ -409,6 +449,9 @@ def main() -> int:
             print("- RAG P95 semantics: histogram bucket upper bound (not an exact percentile)")
         model = report["model_generation"]
         breaker = report["model_breaker"]
+        admission = report["model_admission"]
+        print(f"- Model admission: rejections={admission['rejections']}, in_flight={admission['in_flight']}, rejection_rate={admission['rejection_rate'] if admission['rejection_rate'] is not None else 'N/A'}%")
+        print(f"- Model admission decision wait: accepted={admission['mean_wait_accepted_ms'] if admission['mean_wait_accepted_ms'] is not None else 'N/A'} ms, rejected={admission['mean_wait_rejected_ms'] if admission['mean_wait_rejected_ms'] is not None else 'N/A'} ms")
         print(f"- Model breaker events: open={breaker['open']}, rejected={breaker['rejected']}, probe={breaker['probe']}, closed={breaker['closed']}")
         print(f"- Model generation samples: {model['sample_count']}")
         print(f"- Model generation success samples: {model['success_sample_count']}")
