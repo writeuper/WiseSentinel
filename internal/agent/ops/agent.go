@@ -472,14 +472,27 @@ func buildOpsTiming(task *repository.OpsTask) *domain.OpsTiming {
 		StartedAt:  format(task.StartedAt),
 		FinishedAt: format(task.FinishedAt),
 	}
+	// Keep completed stages observable even when the underlying operation is
+	// faster than one millisecond.  A zero value is misleading to API clients
+	// and dashboards because it means "not measured" as well as "sub-ms".
+	positiveMillis := func(d time.Duration) int64 {
+		if d <= 0 {
+			return 0
+		}
+		ms := d.Milliseconds()
+		if ms == 0 {
+			return 1
+		}
+		return ms
+	}
 	if task.StartedAt != nil && !task.CreatedAt.IsZero() {
-		timing.QueueDurationMS = task.StartedAt.Sub(task.CreatedAt).Milliseconds()
+		timing.QueueDurationMS = positiveMillis(task.StartedAt.Sub(task.CreatedAt))
 	}
 	if task.StartedAt != nil && task.FinishedAt != nil {
-		timing.RunDurationMS = task.FinishedAt.Sub(*task.StartedAt).Milliseconds()
+		timing.RunDurationMS = positiveMillis(task.FinishedAt.Sub(*task.StartedAt))
 	}
 	if task.FinishedAt != nil && !task.CreatedAt.IsZero() {
-		timing.E2EDurationMS = task.FinishedAt.Sub(task.CreatedAt).Milliseconds()
+		timing.E2EDurationMS = positiveMillis(task.FinishedAt.Sub(task.CreatedAt))
 	}
 	return timing
 }

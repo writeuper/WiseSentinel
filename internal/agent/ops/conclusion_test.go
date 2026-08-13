@@ -3,8 +3,10 @@ package ops
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"wisesentinel-platform/internal/domain"
+	"wisesentinel-platform/internal/repository"
 )
 
 func TestParseConclusion_FullSections(t *testing.T) {
@@ -40,6 +42,24 @@ func TestParseConclusion_FullSections(t *testing.T) {
 	}
 	if c.Source != "实时排查结论" {
 		t.Errorf("source = %q, want 实时排查结论", c.Source)
+	}
+}
+
+func TestBuildOpsTiming_PreservesSubMillisecondStages(t *testing.T) {
+	created := time.Now().UTC()
+	started := created.Add(200 * time.Microsecond)
+	finished := started.Add(300 * time.Microsecond)
+	timing := buildOpsTiming(&repository.OpsTask{CreatedAt: created, StartedAt: &started, FinishedAt: &finished})
+	if timing.QueueDurationMS != 1 || timing.RunDurationMS != 1 || timing.E2EDurationMS != 1 {
+		t.Fatalf("timing = %+v, want all completed stages rounded up to 1ms", timing)
+	}
+}
+
+func TestBuildOpsTiming_LeavesMissingStagesZero(t *testing.T) {
+	created := time.Now().UTC()
+	timing := buildOpsTiming(&repository.OpsTask{CreatedAt: created})
+	if timing.QueueDurationMS != 0 || timing.RunDurationMS != 0 || timing.E2EDurationMS != 0 {
+		t.Fatalf("timing = %+v, want missing stages to remain zero", timing)
 	}
 }
 
