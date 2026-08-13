@@ -34,7 +34,7 @@ func Audit(r *ghttp.Request) {
 	// timeout. Audit is a durable after-request obligation, so preserve the
 	// request-scoped identity values but detach the DB write from cancellation
 	// and impose a short bounded deadline.
-	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Second)
+	auditCtx, cancel := detachedAuditContext(r.Context())
 	defer cancel()
 	_, err := g.DB().Insert(auditCtx, "ws_audit_log", g.Map{
 		"tenant_id":     ctxkeys.TenantIDFrom(r.Context()),
@@ -54,6 +54,10 @@ func Audit(r *ghttp.Request) {
 		observability.ObserveAuditWriteFailure(reason)
 		g.Log().Warningf(auditCtx, "audit log insert failed: %v", err)
 	}
+}
+
+func detachedAuditContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), 2*time.Second)
 }
 
 func auditAction(path, method string) string {
