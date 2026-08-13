@@ -231,6 +231,9 @@ type Citation struct {
 	ChunkID string `json:"chunk_id"`
 	Source  string `json:"source"`
 	Snippet string `json:"snippet"`
+	// Version is the published document version/generation when available.
+	// It is optional for legacy documents and keeps old clients compatible.
+	Version string `json:"version,omitempty"`
 }
 
 // ToolCallSummary summarizes a tool invocation in chat response.

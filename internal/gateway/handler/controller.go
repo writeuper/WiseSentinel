@@ -312,6 +312,7 @@ func (c *ControllerV1) Chat(ctx context.Context, req *v1.ChatReq) (*v1.ChatRes, 
 			ChunkID: citation.ChunkID,
 			Source:  redact.Summary(citation.Source, 500),
 			Snippet: redact.Summary(citation.Snippet, 500),
+			Version: redact.Summary(citation.Version, 100),
 		})
 	}
 	toolCalls := make([]v1.ToolCallSummary, 0, len(result.ToolCalls))
@@ -557,6 +558,7 @@ func safeSSECitation(data string) string {
 		ChunkID: citation.ChunkID,
 		Source:  redact.Summary(citation.Source, 500),
 		Snippet: redact.Summary(citation.Snippet, 500),
+		Version: redact.Summary(citation.Version, 100),
 	})
 	if err != nil {
 		return `{}`

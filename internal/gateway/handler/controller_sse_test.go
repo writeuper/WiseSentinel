@@ -37,7 +37,7 @@ func TestFormatSSEPrefixesEveryMultilinePayloadLine(t *testing.T) {
 }
 
 func TestSafeSSECitationProjectsExpectedFields(t *testing.T) {
-	raw, err := json.Marshal(domain.Citation{DocID: "doc-1", ChunkID: "chunk-1", Source: "handbook.md", Snippet: "verified evidence"})
+	raw, err := json.Marshal(domain.Citation{DocID: "doc-1", ChunkID: "chunk-1", Source: "handbook.md", Snippet: "verified evidence", Version: "generation-7"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestSafeSSECitationProjectsExpectedFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(safeSSECitation(string(raw))), &got); err != nil {
 		t.Fatalf("safeSSECitation JSON: %v", err)
 	}
-	if got["doc_id"] != "doc-1" || got["chunk_id"] != "chunk-1" || got["source"] != "handbook.md" || got["snippet"] != "verified evidence" {
+	if got["doc_id"] != "doc-1" || got["chunk_id"] != "chunk-1" || got["source"] != "handbook.md" || got["snippet"] != "verified evidence" || got["version"] != "generation-7" {
 		t.Fatalf("citation projection = %#v", got)
 	}
 	if got := safeSSECitation("not-json"); got != `{}` {

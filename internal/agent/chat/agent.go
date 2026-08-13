@@ -688,6 +688,7 @@ func (a *Agent) retrieveDocs(ctx context.Context, req *domain.ChatAgentRequest) 
 			ChunkID: doc.ChunkID,
 			Source:  doc.Source,
 			Snippet: truncate(doc.Content, 200),
+			Version: doc.Version,
 		})
 	}
 
@@ -746,7 +747,7 @@ func renderRetrievedDocuments(response domain.RetrieveResponse) string {
 func citationsFromDocuments(documents []domain.RetrievedDocument) []domain.Citation {
 	citations := make([]domain.Citation, 0, len(documents))
 	for _, doc := range documents {
-		citations = append(citations, domain.Citation{DocID: doc.DocID, ChunkID: doc.ChunkID, Source: doc.Source, Snippet: truncate(doc.Content, 200)})
+		citations = append(citations, domain.Citation{DocID: doc.DocID, ChunkID: doc.ChunkID, Source: doc.Source, Snippet: truncate(doc.Content, 200), Version: doc.Version})
 	}
 	return citations
 }
