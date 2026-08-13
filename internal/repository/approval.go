@@ -69,12 +69,7 @@ func (r *ApprovalRepo) GetPending(ctx context.Context, tenantID, approvalID stri
 
 // ListPending returns pending approvals for a tenant, paginated.
 func (r *ApprovalRepo) ListPending(ctx context.Context, tenantID string, page, size int) ([]*Approval, int, error) {
-	if page <= 0 {
-		page = 1
-	}
-	if size <= 0 {
-		size = 20
-	}
+	page, size = normalizePageBounds(page, size)
 	var rows []*Approval
 	err := g.DB().Model("ws_approval").Ctx(ctx).
 		Where("tenant_id", tenantID).

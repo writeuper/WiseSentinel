@@ -73,12 +73,7 @@ func (r *FaultKnowledgeRepo) CreateDraft(ctx context.Context, card *FaultKnowled
 }
 
 func (r *FaultKnowledgeRepo) List(ctx context.Context, tenantID, status string, page, size int) ([]FaultKnowledge, int, error) {
-	if page <= 0 {
-		page = 1
-	}
-	if size <= 0 {
-		size = 20
-	}
+	page, size = normalizePageBounds(page, size)
 	model := g.DB().Model("ws_fault_knowledge").Ctx(ctx).Where("tenant_id", tenantID)
 	if status != "" {
 		model = model.Where("status", status)

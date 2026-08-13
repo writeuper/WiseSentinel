@@ -100,12 +100,7 @@ func (r *DocumentRepo) Get(ctx context.Context, tenantID, docID string) (*Docume
 }
 
 func (r *DocumentRepo) List(ctx context.Context, tenantID, status string, page, size int) ([]Document, int, error) {
-	if page <= 0 {
-		page = 1
-	}
-	if size <= 0 {
-		size = 20
-	}
+	page, size = normalizePageBounds(page, size)
 	model := g.DB().Model("ws_document").Ctx(ctx).Where("tenant_id", tenantID)
 	if status != "" {
 		model = model.Where("status", status)

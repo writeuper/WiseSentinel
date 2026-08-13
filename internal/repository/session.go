@@ -82,12 +82,7 @@ func (r *SessionRepo) Get(ctx context.Context, tenantID, sessionID string) (*Ses
 }
 
 func (r *SessionRepo) ListByUser(ctx context.Context, tenantID, userID string, page, size int) ([]Session, int, error) {
-	if page <= 0 {
-		page = 1
-	}
-	if size <= 0 {
-		size = 20
-	}
+	page, size = normalizePageBounds(page, size)
 	model := g.DB().Model("ws_session").Ctx(ctx).
 		Where("tenant_id", tenantID).
 		Where("user_id", userID).

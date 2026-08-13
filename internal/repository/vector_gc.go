@@ -100,12 +100,7 @@ func (r *VectorGCRepo) Get(ctx context.Context, tenantID, docID, targetKey strin
 
 // List returns one tenant's GC tasks for the admin operations surface.
 func (r *VectorGCRepo) List(ctx context.Context, tenantID, status string, page, size int) ([]*VectorGCTask, int, error) {
-	if page <= 0 {
-		page = 1
-	}
-	if size <= 0 || size > 100 {
-		size = 20
-	}
+	page, size = normalizePageBounds(page, size)
 	model := g.DB().Ctx(ctx).Model("ws_rag_vector_gc_task").Where("tenant_id", tenantID)
 	if status != "" {
 		model = model.Where("status", status)

@@ -158,12 +158,7 @@ func (r *OpsTaskRepo) ClaimRunnable(ctx context.Context, tenantID, taskID, execu
 // ListByTenant returns the page-indexed list of ops tasks for a tenant,
 // optionally filtered by status. Most recent first.
 func (r *OpsTaskRepo) ListByTenant(ctx context.Context, tenantID, status string, page, size int) ([]*OpsTask, int, error) {
-	if page <= 0 {
-		page = 1
-	}
-	if size <= 0 {
-		size = 20
-	}
+	page, size = normalizePageBounds(page, size)
 	model := g.DB().Ctx(ctx).Model("ws_ops_task").
 		Where("tenant_id", tenantID)
 	if status != "" {
@@ -186,12 +181,7 @@ func (r *OpsTaskRepo) ListByTenant(ctx context.Context, tenantID, status string,
 // object-level authorization; callers with administrative roles use
 // ListByTenant instead.
 func (r *OpsTaskRepo) ListByTenantAndCreator(ctx context.Context, tenantID, createdBy, status string, page, size int) ([]*OpsTask, int, error) {
-	if page <= 0 {
-		page = 1
-	}
-	if size <= 0 {
-		size = 20
-	}
+	page, size = normalizePageBounds(page, size)
 	model := g.DB().Ctx(ctx).Model("ws_ops_task").
 		Where("tenant_id", tenantID).
 		Where("created_by", createdBy)
