@@ -21,6 +21,7 @@ import (
 	"wisesentinel-platform/internal/pkg/trace"
 	"wisesentinel-platform/internal/repository"
 
+	"github.com/gogf/gf/v2/database/gdb"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/net/ghttp"
 	"github.com/google/uuid"
@@ -1117,31 +1118,57 @@ func (c *ControllerV1) ActivateAgentConfig(ctx context.Context, req *v1.Activate
 		return nil, apperr.ErrBadRequest
 	}
 	tenantID := ctxkeys.TenantIDFrom(ctx)
+	if strings.TrimSpace(req.AgentType) == "" || strings.TrimSpace(req.Version) == "" {
+		return nil, apperr.ErrBadRequest
+	}
 
-	// Deactivate all active configs for this agent type
-	_, err := g.DB().Model("ws_agent_config").Ctx(ctx).
-		Where("tenant_id", tenantID).
-		Where("agent_type", req.AgentType).
-		Where("is_active", 1).
-		Data(g.Map{"is_active": 0}).
-		Update()
+	// Validate the target and switch the pointer in one transaction. A
+	// two-step update can deactivate the current version and then discover a
+	// missing target, leaving the tenant with no active configuration.
+	isActive := false
+	err := g.DB().Transaction(ctx, func(txCtx context.Context, tx gdb.TX) error {
+		var target struct {
+			Version string `json:"version"`
+		}
+		if err := tx.Model("ws_agent_config").Ctx(txCtx).
+			Where("tenant_id", tenantID).
+			Where("agent_type", req.AgentType).
+			Where("version", req.Version).
+			Scan(&target); err != nil {
+			return err
+		}
+		if target.Version == "" {
+			return apperr.ErrNotFound
+		}
+
+		if _, err := tx.Model("ws_agent_config").Ctx(txCtx).
+			Where("tenant_id", tenantID).
+			Where("agent_type", req.AgentType).
+			Where("is_active", 1).
+			Data(g.Map{"is_active": 0}).Update(); err != nil {
+			return err
+		}
+		result, err := tx.Model("ws_agent_config").Ctx(txCtx).
+			Where("tenant_id", tenantID).
+			Where("agent_type", req.AgentType).
+			Where("version", req.Version).
+			Data(g.Map{"is_active": 1}).Update()
+		if err != nil {
+			return err
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rows == 0 {
+			return apperr.ErrConflict
+		}
+		isActive = true
+		return nil
+	})
 	if err != nil {
 		return nil, apperr.Wrap(err, apperr.ErrInternal)
 	}
-
-	// Activate the requested version
-	result, err := g.DB().Model("ws_agent_config").Ctx(ctx).
-		Where("tenant_id", tenantID).
-		Where("agent_type", req.AgentType).
-		Where("version", req.Version).
-		Data(g.Map{"is_active": 1}).
-		Update()
-	if err != nil {
-		return nil, apperr.Wrap(err, apperr.ErrInternal)
-	}
-
-	rowsAffected, _ := result.RowsAffected()
-	isActive := rowsAffected > 0
 
 	return &v1.ActivateAgentConfigRes{
 		AgentType: req.AgentType,
