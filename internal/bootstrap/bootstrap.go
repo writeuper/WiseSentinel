@@ -107,6 +107,12 @@ func Init(ctx context.Context) (*App, error) {
 	chatTurnRepo := repository.NewChatTurnRepo()
 	opsTaskRepo := repository.NewOpsTaskRepo()
 	alertEventRepo := repository.NewAlertEventRepo()
+	if reaped, reapErr := alertEventRepo.ReapOrphanReservations(ctx, 5*time.Minute); reapErr != nil {
+		g.Log().Warning(ctx, "orphan Alertmanager reservation reap failed:", reapErr)
+	} else if reaped > 0 {
+		observability.ObserveAlertEventOrphanReaped(reaped)
+		g.Log().Infof(ctx, "reaped orphan Alertmanager reservations: %d", reaped)
+	}
 
 	// Model Router
 	modelRouter := model.NewRouter(ctx)

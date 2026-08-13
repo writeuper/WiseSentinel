@@ -77,6 +77,31 @@ func (r *AlertEventRepo) Delete(ctx context.Context, tenantID, eventID string) e
 	return err
 }
 
+// ReapOrphanReservations removes old firing reservations whose bound Ops task
+// was never persisted (for example a process crash between the event insert
+// and Agent task creation). The age guard prevents deleting a valid task while
+// a transaction or worker is still settling.
+func (r *AlertEventRepo) ReapOrphanReservations(ctx context.Context, age time.Duration) (int64, error) {
+	if age <= 0 {
+		age = 5 * time.Minute
+	}
+	cutoff := time.Now().Add(-age)
+	result, err := g.DB().Exec(ctx, `
+DELETE FROM ws_alert_event
+ WHERE status = 'firing'
+   AND task_id <> ''
+   AND received_at < ?
+   AND NOT EXISTS (
+       SELECT 1 FROM ws_ops_task t
+        WHERE t.tenant_id = ws_alert_event.tenant_id
+          AND t.task_id = ws_alert_event.task_id
+   )`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func (r *AlertEventRepo) MarkResolved(ctx context.Context, tenantID, incidentKey string, resolvedAt time.Time) error {
 	_, err := g.DB().Model("ws_alert_event").Ctx(ctx).Where("tenant_id", tenantID).Where("incident_key", incidentKey).Where("status", "firing").Data(g.Map{"status": "resolved", "resolved_at": resolvedAt}).Update()
 	return err
