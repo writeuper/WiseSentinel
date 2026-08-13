@@ -120,8 +120,8 @@ func (r *ApprovalRepo) Decide(ctx context.Context, tenantID, approvalID, decisio
 	if err != nil {
 		return false, err
 	}
-	rows, _ := result.RowsAffected()
-	return rows > 0, nil
+	rows, err := result.RowsAffected()
+	return rows > 0, err
 }
 
 // ExpireStale marks all expired pending approvals as expired.
