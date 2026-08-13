@@ -172,7 +172,7 @@ func (r *OpsTaskRepo) ListByTenant(ctx context.Context, tenantID, status string,
 		Where("tenant_id", tenantID).
 		Count()
 	if err != nil {
-		return tasks, 0, nil
+		return tasks, 0, err
 	}
 	return tasks, total, nil
 }
@@ -194,7 +194,7 @@ func (r *OpsTaskRepo) ListByTenantAndCreator(ctx context.Context, tenantID, crea
 	}
 	total, err := model.Count()
 	if err != nil {
-		return tasks, 0, nil
+		return tasks, 0, err
 	}
 	return tasks, total, nil
 }

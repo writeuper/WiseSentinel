@@ -86,7 +86,7 @@ func (r *ApprovalRepo) ListPending(ctx context.Context, tenantID string, page, s
 		Where("status", "pending").
 		Count()
 	if err != nil {
-		return rows, 0, nil
+		return rows, 0, err
 	}
 	return rows, total, nil
 }
