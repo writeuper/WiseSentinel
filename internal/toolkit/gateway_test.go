@@ -10,8 +10,10 @@ import (
 	"wisesentinel-platform/internal/domain"
 	"wisesentinel-platform/internal/pkg/ctxkeys"
 	"wisesentinel-platform/internal/toolkit"
+	mcpadapter "wisesentinel-platform/internal/toolkit/mcp"
 
 	"github.com/cloudwego/eino/components/tool"
+	mcpapi "github.com/mark3labs/mcp-go/mcp"
 )
 
 func TestMain(m *testing.M) {
@@ -102,6 +104,32 @@ func TestGatewayInvokeMCPTimeConversionFallback(t *testing.T) {
 	}
 	if !strings.Contains(resp.Output, `"target_timezone":"UTC"`) || !strings.Contains(resp.Output, `"time":"2026-08-13 01:00:00"`) {
 		t.Fatalf("unexpected conversion output: %s", resp.Output)
+	}
+}
+
+type failingMCPTimeClient struct{}
+
+func (failingMCPTimeClient) ListTools(context.Context, mcpapi.ListToolsRequest) (*mcpapi.ListToolsResult, error) {
+	return nil, nil
+}
+func (failingMCPTimeClient) CallTool(context.Context, mcpapi.CallToolRequest) (*mcpapi.CallToolResult, error) {
+	return &mcpapi.CallToolResult{IsError: true}, nil
+}
+func (failingMCPTimeClient) Close() error { return nil }
+
+func TestGatewayFallsBackWhenMCPTimeToolReturnsError(t *testing.T) {
+	ctx := ctxWithRoles(context.Background(), "viewer")
+	gw := toolkit.NewGateway(ctx)
+	gw.SetMCPTimeAdapter(mcpadapter.NewTimeAdapter(failingMCPTimeClient{}))
+	resp, err := gw.Invoke(ctx, &domain.ToolInvokeRequest{
+		ToolName: "mcp_time_convert_time",
+		Input:    json.RawMessage(`{"source_timezone":"Asia/Shanghai","time":"2026-08-13 09:00:00","target_timezone":"UTC"}`),
+	})
+	if err != nil {
+		t.Fatalf("MCP error should use local fallback: %v", err)
+	}
+	if !strings.Contains(resp.Output, `"target_timezone":"UTC"`) || !strings.Contains(resp.Output, `"time":"2026-08-13 01:00:00"`) {
+		t.Fatalf("unexpected fallback output: %s", resp.Output)
 	}
 }
 

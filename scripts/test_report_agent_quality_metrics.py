@@ -16,6 +16,13 @@ class ReportMetricsTests(unittest.TestCase):
         self.assertIn("status NOT IN ('success','completed')", source)
         self.assertNotIn("status IN ('failed','error','timeout','canceled')", source)
 
+    def test_step_average_uses_finished_trace_left_join_and_zero_step_denominator(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        self.assertIn("LEFT JOIN ws_agent_trace_step", source)
+        self.assertIn("s.tenant_id = t.tenant_id", source)
+        self.assertIn("WHERE t.finished_at IS NOT NULL", source)
+        self.assertIn('"finished_traces"', source)
+
     def test_parse_histogram_separates_success_and_error(self):
         text = """
 ws_rag_retrieval_duration_seconds_bucket{outcome="success",confidence="high",le="0.25"} 3

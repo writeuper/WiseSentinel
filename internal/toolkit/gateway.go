@@ -100,8 +100,24 @@ func (gw *Gateway) SetMCPTimeAdapter(adapter *mcpadapter.TimeAdapter) {
 	}
 	gw.mu.Lock()
 	defer gw.mu.Unlock()
-	gw.adapters["mcp_time_get_current_time"] = adapter.GetCurrentTime
-	gw.adapters["mcp_time_convert_time"] = adapter.ConvertTime
+	// MCP is the preferred integration, but it is optional and can return a
+	// protocol/tool error while the local deterministic implementation remains
+	// usable. Keep the fallback in the adapter closure so a transient MCP
+	// failure does not turn a supported Chat request into a 500.
+	gw.adapters["mcp_time_get_current_time"] = func(ctx context.Context, input json.RawMessage) (string, error) {
+		output, err := adapter.GetCurrentTime(ctx, input)
+		if err == nil {
+			return output, nil
+		}
+		return adapters.GetCurrentTime(ctx, input)
+	}
+	gw.adapters["mcp_time_convert_time"] = func(ctx context.Context, input json.RawMessage) (string, error) {
+		output, err := adapter.ConvertTime(ctx, input)
+		if err == nil {
+			return output, nil
+		}
+		return adapters.ConvertTime(ctx, input)
+	}
 }
 
 // EnableInternalDocsAdapter exposes knowledge retrieval only after bootstrap

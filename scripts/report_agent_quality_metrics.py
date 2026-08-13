@@ -131,14 +131,24 @@ def aggregate() -> dict[str, Any]:
       FROM ws_agent_trace WHERE finished_at IS NOT NULL
       GROUP BY agent_type ORDER BY agent_type
     """)
+    # The denominator is every finished Agent trace, including a terminal
+    # trace that has no persisted step (for example an early validation or
+    # admission failure).  Joining only ws_agent_trace_step would both exclude
+    # those zero-step traces and accidentally include unfinished traces.
     steps = mysql_query("""
       SELECT COUNT(*), COALESCE(AVG(step_count),0), COALESCE(MIN(step_count),0), COALESCE(MAX(step_count),0)
-      FROM (SELECT trace_id, COUNT(*) step_count FROM ws_agent_trace_step GROUP BY trace_id) s
+      FROM (
+        SELECT t.trace_id, COUNT(s.id) step_count
+        FROM ws_agent_trace t
+        LEFT JOIN ws_agent_trace_step s ON s.trace_id = t.trace_id AND s.tenant_id = t.tenant_id
+        WHERE t.finished_at IS NOT NULL
+        GROUP BY t.trace_id
+      ) s
     """)[0]
     by_agent = mysql_query("""
       SELECT agent_type, COUNT(*), COALESCE(AVG(step_count),0)
       FROM (SELECT t.agent_type, t.trace_id, COUNT(s.id) step_count
-            FROM ws_agent_trace t LEFT JOIN ws_agent_trace_step s ON s.trace_id=t.trace_id
+            FROM ws_agent_trace t LEFT JOIN ws_agent_trace_step s ON s.trace_id=t.trace_id AND s.tenant_id=t.tenant_id
             WHERE t.finished_at IS NOT NULL GROUP BY t.agent_type,t.trace_id) x
       GROUP BY agent_type ORDER BY agent_type
     """)
@@ -152,7 +162,7 @@ def aggregate() -> dict[str, Any]:
                    "finished": safe_int(traces[0]), "avg_latency_ms_success": round(safe_float(traces[3]), 2),
                    "avg_latency_ms_failed": round(safe_float(traces[4]), 2),
                    "avg_latency_ms_all": round((safe_float(traces[3]) * safe_int(traces[1]) + safe_float(traces[4]) * safe_int(traces[2])) / max(1, safe_int(traces[1]) + safe_int(traces[2])), 2)},
-        "steps": {"traces_with_steps": safe_int(steps[0]), "avg_per_trace": round(safe_float(steps[1]), 3),
+        "steps": {"finished_traces": safe_int(steps[0]), "traces_with_steps": safe_int(steps[0]), "avg_per_trace": round(safe_float(steps[1]), 3),
                    "min": safe_int(steps[2]), "max": safe_int(steps[3])},
         "by_agent_type": [{"agent_type": row[0], "traces": safe_int(row[1]), "avg_steps": round(safe_float(row[2]), 3)} for row in by_agent],
         "latency_by_agent_type": [{"agent_type": row[0], "traces": safe_int(row[1]),
