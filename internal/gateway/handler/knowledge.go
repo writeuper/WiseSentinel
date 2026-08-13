@@ -26,6 +26,9 @@ var allowedUploadExt = map[string]struct{}{
 
 // UploadDocument stores a file and runs synchronous indexing.
 func (c *ControllerV1) UploadDocument(ctx context.Context, req *v1.UploadDocumentReq) (*v1.UploadDocumentRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	if c.app.RAG == nil {
 		return nil, apperr.ErrRAGFailed
 	}
@@ -113,6 +116,9 @@ func (c *ControllerV1) UploadDocument(ctx context.Context, req *v1.UploadDocumen
 
 // ListDocuments returns paginated knowledge documents.
 func (c *ControllerV1) ListDocuments(ctx context.Context, req *v1.ListDocumentsReq) (*v1.ListDocumentsRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	tenantID := ctxkeys.TenantIDFrom(ctx)
 	docs, total, err := c.app.Documents.List(ctx, tenantID, req.Status, req.Page, req.Size)
 	if err != nil {
@@ -135,6 +141,9 @@ func (c *ControllerV1) ListDocuments(ctx context.Context, req *v1.ListDocumentsR
 // DeleteDocument soft-deletes a document and durably schedules tenant-scoped
 // vector cleanup. Retrieval fails closed immediately; Milvus cleanup retries.
 func (c *ControllerV1) DeleteDocument(ctx context.Context, req *v1.DeleteDocumentReq) (*v1.DeleteDocumentRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	tenantID := ctxkeys.TenantIDFrom(ctx)
 	doc, err := c.app.Documents.Get(ctx, tenantID, req.DocID)
 	if err != nil {
@@ -159,6 +168,9 @@ func (c *ControllerV1) DeleteDocument(ctx context.Context, req *v1.DeleteDocumen
 // worker stages a new generation, then atomically publishes it only if the
 // document remains active and the request is still the desired generation.
 func (c *ControllerV1) ReindexDocument(ctx context.Context, req *v1.ReindexDocumentReq) (*v1.ReindexDocumentRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	if c.app.RAG == nil {
 		return nil, apperr.ErrRAGFailed
 	}
@@ -188,6 +200,9 @@ func (c *ControllerV1) ReindexDocument(ctx context.Context, req *v1.ReindexDocum
 
 // GetIndexTask returns indexing task status.
 func (c *ControllerV1) GetIndexTask(ctx context.Context, req *v1.GetIndexTaskReq) (*v1.GetIndexTaskRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	if c.app.RAG == nil {
 		return nil, apperr.ErrRAGFailed
 	}
@@ -206,6 +221,9 @@ func (c *ControllerV1) GetIndexTask(ctx context.Context, req *v1.GetIndexTaskReq
 }
 
 func (c *ControllerV1) ListFaultKnowledge(ctx context.Context, req *v1.ListFaultKnowledgeReq) (*v1.ListFaultKnowledgeRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	tenantID := ctxkeys.TenantIDFrom(ctx)
 	rows, total, err := c.app.FaultKnowledgeRepo.List(ctx, tenantID, req.Status, req.Page, req.Size)
 	if err != nil {
@@ -219,6 +237,9 @@ func (c *ControllerV1) ListFaultKnowledge(ctx context.Context, req *v1.ListFault
 }
 
 func (c *ControllerV1) ApproveFaultKnowledge(ctx context.Context, req *v1.ApproveFaultKnowledgeReq) (*v1.ApproveFaultKnowledgeRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	if c.app.RAG == nil {
 		return nil, apperr.ErrRAGFailed
 	}
@@ -272,6 +293,9 @@ func (c *ControllerV1) ApproveFaultKnowledge(ctx context.Context, req *v1.Approv
 }
 
 func (c *ControllerV1) RejectFaultKnowledge(ctx context.Context, req *v1.RejectFaultKnowledgeReq) (*v1.RejectFaultKnowledgeRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	tenantID := ctxkeys.TenantIDFrom(ctx)
 	userID := ctxkeys.UserIDFrom(ctx)
 	if err := c.app.FaultKnowledgeRepo.Reject(ctx, tenantID, req.CardID, userID); err != nil {
@@ -281,6 +305,9 @@ func (c *ControllerV1) RejectFaultKnowledge(ctx context.Context, req *v1.RejectF
 }
 
 func (c *ControllerV1) FeedbackFaultKnowledge(ctx context.Context, req *v1.FeedbackFaultKnowledgeReq) (*v1.FeedbackFaultKnowledgeRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	if req.Rating != "useful" && req.Rating != "bad" {
 		return nil, apperr.New(40001, 400, "rating must be useful or bad")
 	}
