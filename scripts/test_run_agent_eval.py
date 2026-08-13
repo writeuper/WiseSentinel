@@ -11,6 +11,10 @@ SPEC.loader.exec_module(MODULE)
 
 
 class EvalSessionCleanupTests(unittest.TestCase):
+    def test_citation_quality_requires_structural_fields_and_counts_versions(self) -> None:
+        self.assertEqual(MODULE.citation_quality([{"doc_id":"d", "chunk_id":"c", "source":"s", "snippet":"x", "version":"v1"}, {"doc_id":"d"}]), (2, 1, 1))
+        self.assertEqual(MODULE.citation_quality("not-a-list"), (0, 0, 0))
+
     def test_default_evaluation_input_is_frozen_enterprise_matrix(self) -> None:
         self.assertEqual(MODULE.DEFAULT_INPUT, "docs/整理与提升/enterprise_agent_eval_cases_130.csv")
 

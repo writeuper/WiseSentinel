@@ -248,6 +248,23 @@ def extract_chat_result(resp: Dict[str, Any], trace: Dict[str, Any] | None = Non
     return "chat", tools, "\n".join(parts), trace_summary, trace_verified
 
 
+def citation_quality(citations: Any) -> Tuple[int, int, int]:
+    """Return total, structurally valid, and versioned Citation counts."""
+    if not isinstance(citations, list):
+        return 0, 0, 0
+    total = valid = versioned = 0
+    for citation in citations:
+        if not isinstance(citation, dict):
+            continue
+        total += 1
+        required = (citation.get("doc_id"), citation.get("chunk_id"), citation.get("source"), citation.get("snippet"))
+        if all(isinstance(value, str) and value.strip() for value in required):
+            valid += 1
+            if isinstance(citation.get("version"), str) and citation.get("version", "").strip():
+                versioned += 1
+    return total, valid, versioned
+
+
 def has_knowledge_workflow_evidence(answer: str, citations: Any) -> bool:
     evidence = answer + "\n" + normalize_text(citations)
     return "上传索引流程" in evidence or "query_internal_docs" in evidence
@@ -398,6 +415,7 @@ def optimization_action(bad_case: str) -> str:
 def run_case(client: EvalClient, row: Dict[str, str], args: argparse.Namespace) -> Dict[str, str]:
     expected_route = (row.get("expected_route") or "").strip().lower()
     actual_route = actual_tools = actual_output = trace_summary = error = ""
+    citation_total = citation_valid = citation_versioned = 0
     trace_verified = True
     started = time.time()
     try:
@@ -406,6 +424,7 @@ def run_case(client: EvalClient, row: Dict[str, str], args: argparse.Namespace) 
             trace_id = response.get("trace_id") or ""
             trace = client.get_trace(trace_id) if trace_id else {}
             actual_route, actual_tools, actual_output, trace_summary, trace_verified = extract_chat_result(response, trace)
+            citation_total, citation_valid, citation_versioned = citation_quality(response.get("citations"))
         elif expected_route == "ops":
             actual_route, actual_tools, actual_output = extract_ops_result(client.call_ops(row.get("input", ""), args.max_iterations))
         elif expected_route == "knowledge":
@@ -428,7 +447,7 @@ def run_case(client: EvalClient, row: Dict[str, str], args: argparse.Namespace) 
     elif not error and not source_ok:
         bad_case = "evidence_source_miss"
     result = dict(row)
-    result.update({"actual_route": actual_route, "actual_tools": actual_tools, "trace_summary": summarize_output(trace_summary, args.output_max_len), "actual_output": summarize_output(actual_output, args.output_max_len), "passed": "Y" if not bad_case else "N", "bad_case": bad_case, "optimization_action": optimization_action(bad_case), "latency_ms": str(int((time.time() - started) * 1000)), "tool_hit": f"{tool_hit}/{tool_total}" if tool_total else "", "forbidden_tool_hit": f"{forbidden_hit}/{forbidden_total}" if forbidden_total else "", "knowledge_hit": f"{knowledge_hit}/{knowledge_total}" if knowledge_total else "", "keyword_hit": f"{keyword_hit}/{keyword_total}" if keyword_total else ""})
+    result.update({"actual_route": actual_route, "actual_tools": actual_tools, "trace_summary": summarize_output(trace_summary, args.output_max_len), "actual_output": summarize_output(actual_output, args.output_max_len), "passed": "Y" if not bad_case else "N", "bad_case": bad_case, "optimization_action": optimization_action(bad_case), "latency_ms": str(int((time.time() - started) * 1000)), "tool_hit": f"{tool_hit}/{tool_total}" if tool_total else "", "forbidden_tool_hit": f"{forbidden_hit}/{forbidden_total}" if forbidden_total else "", "knowledge_hit": f"{knowledge_hit}/{knowledge_total}" if knowledge_total else "", "keyword_hit": f"{keyword_hit}/{keyword_total}" if keyword_total else "", "citation_hit": f"{citation_valid}/{citation_total}" if citation_total else "", "citation_versioned": f"{citation_versioned}/{citation_total}" if citation_total else ""})
     return result
 
 
@@ -452,7 +471,7 @@ def read_cases(path: Path) -> Tuple[List[str], List[Dict[str, str]]]:
 
 def write_results(path: Path, fieldnames: List[str], rows: List[Dict[str, str]]) -> None:
     output_fields = list(fieldnames)
-    for field in ["latency_ms", "tool_hit", "forbidden_tool_hit", "knowledge_hit", "keyword_hit", "trace_summary"]:
+    for field in ["latency_ms", "tool_hit", "forbidden_tool_hit", "knowledge_hit", "keyword_hit", "citation_hit", "citation_versioned", "trace_summary"]:
         if field not in output_fields:
             output_fields.append(field)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -489,6 +508,16 @@ def build_metrics(rows: List[Dict[str, str]]) -> Dict[str, Any]:
                 if row in business_rows:
                     business_keyword_hit += int(hit)
                     business_keyword_total += int(total)
+    citation_valid = citation_total = citation_versioned = 0
+    for row in executable:
+        for field, target in (("citation_hit", "valid"), ("citation_versioned", "versioned")):
+            if row.get(field):
+                hit, total = row[field].split("/", 1)
+                if target == "valid":
+                    citation_valid += int(hit)
+                    citation_total += int(total)
+                else:
+                    citation_versioned += int(hit)
     latencies = sorted(int(row.get("latency_ms") or 0) for row in executable)
     def percentile(percent: float) -> int | None:
         if not latencies:
@@ -516,6 +545,11 @@ def build_metrics(rows: List[Dict[str, str]]) -> Dict[str, Any]:
         "keyword_hit_rate": keyword_hit / keyword_total if keyword_total else None,
         "keyword_hits": keyword_hit,
         "keyword_total": keyword_total,
+        "citation_valid": citation_valid,
+        "citation_total": citation_total,
+        "citation_validity_rate": citation_valid / citation_total if citation_total else None,
+        "citation_versioned": citation_versioned,
+        "citation_version_rate": citation_versioned / citation_total if citation_total else None,
         "business_keyword_hit_rate": business_keyword_hit / business_keyword_total if business_keyword_total else None,
         "business_keyword_hits": business_keyword_hit,
         "business_keyword_total": business_keyword_total,
@@ -539,6 +573,8 @@ def print_metrics(metrics: Dict[str, Any]) -> None:
     print(f"business tool success rate: {pct(metrics['business_tool_success_rate'])} ({metrics['business_tool_hits']}/{metrics['business_tool_total']})")
     print(f"keyword hit rate: {pct(metrics['keyword_hit_rate'])} ({metrics['keyword_hits']}/{metrics['keyword_total']})")
     print(f"business keyword hit rate: {pct(metrics['business_keyword_hit_rate'])} ({metrics['business_keyword_hits']}/{metrics['business_keyword_total']})")
+    print(f"citation validity: {pct(metrics['citation_validity_rate'])} ({metrics['citation_valid']}/{metrics['citation_total']})")
+    print(f"citation version coverage: {pct(metrics['citation_version_rate'])} ({metrics['citation_versioned']}/{metrics['citation_total']})")
     print(f"latency: p50={metrics['latency_ms']['p50']}ms p95={metrics['latency_ms']['p95']}ms")
     print("bad case distribution:")
     for name, count in sorted(metrics["bad_case_distribution"].items(), key=lambda item: (-item[1], item[0])):
