@@ -759,7 +759,11 @@ func (c *ControllerV1) handleAlertmanager(ctx context.Context, receiver, status,
 		incidentKey = alerts[0].Fingerprint
 	}
 	if c.app.AlertEventRepo != nil {
-		if existing, err := c.app.AlertEventRepo.Get(ctx, tenantID, eventID); err == nil && existing != nil {
+		existing, err := c.app.AlertEventRepo.Get(ctx, tenantID, eventID)
+		if err != nil {
+			return nil, apperr.Wrap(err, apperr.ErrInternal)
+		}
+		if existing != nil {
 			return &v1.AlertWebhookRes{TaskID: existing.TaskID, Status: existing.Status}, nil
 		}
 	}
@@ -778,10 +782,16 @@ func (c *ControllerV1) handleAlertmanager(ctx context.Context, receiver, status,
 	if status == "resolved" {
 		var taskID string
 		if c.app.AlertEventRepo != nil {
-			if existing, _ := c.app.AlertEventRepo.GetByIncident(ctx, tenantID, incidentKey); existing != nil {
+			existing, err := c.app.AlertEventRepo.GetByIncident(ctx, tenantID, incidentKey)
+			if err != nil {
+				return nil, apperr.Wrap(err, apperr.ErrInternal)
+			}
+			if existing != nil {
 				taskID = existing.TaskID
 			}
-			_ = c.app.AlertEventRepo.MarkResolved(ctx, tenantID, incidentKey, time.Now())
+			if err := c.app.AlertEventRepo.MarkResolved(ctx, tenantID, incidentKey, time.Now()); err != nil {
+				return nil, apperr.Wrap(err, apperr.ErrInternal)
+			}
 		}
 		return &v1.AlertWebhookRes{TaskID: taskID, Status: "resolved"}, nil
 	}
@@ -793,7 +803,11 @@ func (c *ControllerV1) handleAlertmanager(ctx context.Context, receiver, status,
 	event := &repository.AlertEvent{TenantID: tenantID, EventID: eventID, IncidentKey: incidentKey, Receiver: receiver, GroupKey: groupKey, Status: status, PayloadJSON: alertEventProjection(receiver, status, groupKey, commonLabels, commonAnnotations, externalURL, version, alerts), TaskID: reservedTaskID, ReceivedAt: time.Now()}
 	if c.app.AlertEventRepo != nil {
 		if err := c.app.AlertEventRepo.Create(ctx, event); err != nil {
-			if existing, getErr := c.app.AlertEventRepo.Get(ctx, tenantID, eventID); getErr == nil && existing != nil {
+			existing, getErr := c.app.AlertEventRepo.Get(ctx, tenantID, eventID)
+			if getErr != nil {
+				return nil, apperr.Wrap(getErr, apperr.ErrInternal)
+			}
+			if existing != nil {
 				return &v1.AlertWebhookRes{TaskID: existing.TaskID, Status: existing.Status}, nil
 			}
 			return nil, err
@@ -817,7 +831,9 @@ func (c *ControllerV1) handleAlertmanager(ctx context.Context, receiver, status,
 	// Keep the event/task binding explicit even if a future Agent implementation
 	// normalizes or returns a different response shape.
 	if c.app.AlertEventRepo != nil && result.TaskID != reservedTaskID {
-		_ = c.app.AlertEventRepo.UpdateTaskID(ctx, tenantID, eventID, result.TaskID)
+		if err := c.app.AlertEventRepo.UpdateTaskID(ctx, tenantID, eventID, result.TaskID); err != nil {
+			return nil, apperr.Wrap(err, apperr.ErrInternal)
+		}
 	}
 	return &v1.AlertWebhookRes{TaskID: result.TaskID, Status: string(result.Status)}, nil
 }
