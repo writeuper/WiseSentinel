@@ -48,6 +48,25 @@ ws_rag_retrieval_duration_seconds_count{outcome="error",confidence="low"} 2
         self.assertEqual(report["sample_count"], 0)
         self.assertIsNone(report["success_p95_ms"])
 
+    def test_parse_model_histogram_separates_success_and_timeout(self):
+        text = """
+ws_model_call_duration_seconds_bucket{operation="generate",outcome="success",provider="openai",le="5"} 2
+ws_model_call_duration_seconds_bucket{operation="generate",outcome="success",provider="openai",le="10"} 2
+ws_model_call_duration_seconds_bucket{operation="generate",outcome="success",provider="openai",le="+Inf"} 2
+ws_model_call_duration_seconds_sum{operation="generate",outcome="success",provider="openai"} 8
+ws_model_call_duration_seconds_count{operation="generate",outcome="success",provider="openai"} 2
+ws_model_call_duration_seconds_bucket{operation="generate",outcome="timeout",provider="openai",le="60"} 1
+ws_model_call_duration_seconds_bucket{operation="generate",outcome="timeout",provider="openai",le="+Inf"} 1
+ws_model_call_duration_seconds_sum{operation="generate",outcome="timeout",provider="openai"} 60
+ws_model_call_duration_seconds_count{operation="generate",outcome="timeout",provider="openai"} 1
+"""
+        report = MODULE.parse_model_prometheus(text)
+        self.assertEqual(report["sample_count"], 3)
+        self.assertEqual(report["success_sample_count"], 2)
+        self.assertEqual(report["timeout_sample_count"], 1)
+        self.assertEqual(report["success_p95_ms"], 5000.0)
+        self.assertEqual(report["success_mean_ms"], 4000.0)
+
 
 if __name__ == "__main__":
     unittest.main()

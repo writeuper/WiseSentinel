@@ -102,11 +102,64 @@ def parse_prometheus(text: str) -> dict[str, Any]:
     }
 
 
-def fetch_metrics(url: str) -> dict[str, Any]:
+def parse_model_prometheus(text: str) -> dict[str, Any]:
+    """Aggregate model generation latency without exposing provider details.
+
+    Percentiles are finite histogram bucket upper bounds.  Keep success and
+    timeout outcomes separate so upstream model tail latency is not confused
+    with RAG or end-to-end Agent latency.
+    """
+    buckets: dict[str, dict[float, float]] = defaultdict(lambda: defaultdict(float))
+    sums: dict[str, float] = defaultdict(float)
+    totals: dict[str, float] = defaultdict(float)
+    for line in text.splitlines():
+        if line.startswith("#") or "ws_model_call_duration_seconds" not in line:
+            continue
+        outcome_match = re.search(r'outcome="([^"]+)"', line)
+        outcome = outcome_match.group(1) if outcome_match else "unknown"
+        if "_bucket{" in line:
+            match = re.search(r'le="([^"]+)"[^ ]*\s+([0-9.eE+-]+)$', line)
+            if match:
+                bound = float("inf") if match.group(1) == "+Inf" else float(match.group(1))
+                buckets[outcome][bound] += safe_float(match.group(2))
+        elif "_count" in line:
+            totals[outcome] += safe_float(line.rsplit(" ", 1)[-1])
+        elif "_sum" in line:
+            sums[outcome] += safe_float(line.rsplit(" ", 1)[-1])
+
+    def p95(outcome: str) -> float | None:
+        total = totals.get(outcome, 0.0)
+        if not total:
+            return None
+        target = total * 0.95
+        bound = next((item for item, value in sorted(buckets.get(outcome, {}).items()) if value >= target), None)
+        return None if bound is None or bound == float("inf") else round(bound * 1000, 3)
+
+    success = int(totals.get("success", 0.0))
+    timeout = int(totals.get("timeout", 0.0))
+    return {
+        "sample_count": int(sum(totals.values())),
+        "success_sample_count": success,
+        "timeout_sample_count": timeout,
+        "success_p95_ms": p95("success"),
+        "success_mean_ms": round(sums.get("success", 0.0) / success * 1000, 3) if success else None,
+        "p95_semantics": "histogram_bucket_upper_bound_ms" if totals else None,
+    }
+
+
+def fetch_raw_metrics(url: str) -> str:
     try:
         with urllib.request.urlopen(url, timeout=10) as response:
-            return parse_prometheus(response.read().decode("utf-8", "replace"))
+            return response.read().decode("utf-8", "replace")
     except Exception:
+        return ""
+
+
+def fetch_metrics(url: str) -> dict[str, Any]:
+    text = fetch_raw_metrics(url)
+    if text:
+        return parse_prometheus(text)
+    else:
         return {"sample_count": 0, "success_sample_count": 0, "error_sample_count": 0,
                 "p95_ms": None, "success_p95_ms": None, "all_p95_ms": None,
                 "mean_ms": None, "success_mean_ms": None, "p95_semantics": None}
@@ -156,6 +209,7 @@ def aggregate() -> dict[str, Any]:
       SELECT COUNT(*), COALESCE(SUM(CASE WHEN status IN ('success','succeeded','completed') THEN 1 ELSE 0 END),0)
       FROM ws_tool_call_record
     """)[0]
+    metrics_text = fetch_raw_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics"))
     result: dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "trace": {"completed_or_success": safe_int(traces[1]), "failed_or_terminal_error": safe_int(traces[2]),
@@ -171,7 +225,8 @@ def aggregate() -> dict[str, Any]:
                                     "avg_latency_ms_all": round(safe_float(row[4]), 2)} for row in latency_by_agent],
         "tool_calls": {"total": safe_int(tools[0]), "successful": safe_int(tools[1]),
                         "success_rate": round(safe_int(tools[1]) / safe_int(tools[0]) * 100, 2) if safe_int(tools[0]) else None},
-        "rag_retrieval": fetch_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics")),
+        "rag_retrieval": parse_prometheus(metrics_text) if metrics_text else fetch_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics")),
+        "model_generation": parse_model_prometheus(metrics_text),
     }
     return result
 
@@ -203,6 +258,12 @@ def main() -> int:
         print(f"- RAG successful retrieval mean: {rag.get('success_mean_ms') if rag.get('success_mean_ms') is not None else 'N/A'} ms")
         if rag.get("p95_semantics"):
             print("- RAG P95 semantics: histogram bucket upper bound (not an exact percentile)")
+        model = report["model_generation"]
+        print(f"- Model generation samples: {model['sample_count']}")
+        print(f"- Model generation success samples: {model['success_sample_count']}")
+        print(f"- Model generation timeout samples: {model['timeout_sample_count']}")
+        print(f"- Model generation successful P95: {model['success_p95_ms'] if model['success_p95_ms'] is not None else 'N/A'} ms")
+        print(f"- Model generation successful mean: {model['success_mean_ms'] if model['success_mean_ms'] is not None else 'N/A'} ms")
         if rag["sample_count"] < 30 or rag.get("success_sample_count", 0) < 30:
             print("\n> RAG P95 is provisional when fewer than 30 total and successful retrieval samples exist; this is not a production SLA.")
     return 0
