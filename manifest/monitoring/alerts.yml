@@ -35,6 +35,46 @@ groups:
           summary: WiseSentinel HTTP p95 latency is high
           description: HTTP p95 latency is above 1 second for more than 10 minutes.
 
+      - alert: WiseSentinelToolCallFailureRate
+        expr: |
+          sum(rate(ws_tool_calls_total{job="wisesentinel-platform",outcome=~"error|timeout|unavailable"}[5m]))
+          /
+          clamp_min(sum(rate(ws_tool_calls_total{job="wisesentinel-platform"}[5m])), 1)
+          > 0.10
+        for: 10m
+        labels:
+          severity: warning
+          component: tools
+        annotations:
+          summary: WiseSentinel tool-call failure rate is high
+          description: Tool calls with error, timeout or unavailable outcomes exceed 10% of calls for more than 10 minutes. Check Tool Gateway dependencies, timeouts and allowlists.
+
+      - alert: WiseSentinelRAGHighRetrievalLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(ws_rag_retrieval_duration_seconds_bucket{job="wisesentinel-platform"}[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+          component: rag
+        annotations:
+          summary: WiseSentinel RAG retrieval p95 latency is high
+          description: RAG retrieval p95 latency is above 1 second for more than 10 minutes. Check Milvus, embedding and retrieval dependency health.
+
+      - alert: WiseSentinelOpsHighTaskLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(ws_ops_task_duration_seconds_bucket{job="wisesentinel-platform",stage="e2e"}[5m]))
+          ) > 10
+        for: 10m
+        labels:
+          severity: warning
+          component: ops
+        annotations:
+          summary: WiseSentinel Ops task p95 latency is high
+          description: Ops end-to-end task p95 latency is above 10 seconds for more than 10 minutes. Check queue backlog, model latency, tool retries and replanning.
+
       - alert: WiseSentinelRAGVectorGCDeadLetter
         expr: ws_rag_vector_gc_dead_tasks_24h > 0
         for: 5m
