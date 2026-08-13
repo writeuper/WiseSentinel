@@ -9,6 +9,7 @@ import (
 	"wisesentinel-platform/internal/domain"
 	"wisesentinel-platform/internal/pkg/redact"
 
+	"github.com/gogf/gf/v2/database/gdb"
 	"github.com/gogf/gf/v2/frame/g"
 )
 
@@ -30,6 +31,9 @@ type IndexTaskRecord struct {
 	FinishedAt     *time.Time
 	ExecutionToken string
 	LeaseExpiresAt *time.Time
+	AttemptCount   int
+	MaxAttempts    int
+	NextAttemptAt  *time.Time
 	Generation     uint64
 	CreatedAt      time.Time
 }
@@ -53,7 +57,13 @@ func (r *IndexTaskRepo) Create(ctx context.Context, task *IndexTaskRecord) error
 		"version":      task.Version,
 		"service":      task.Service,
 		"status":       task.Status,
-		"generation":   task.Generation,
+		"max_attempts": func() int {
+			if task.MaxAttempts > 0 {
+				return task.MaxAttempts
+			}
+			return 3
+		}(),
+		"generation": task.Generation,
 	})
 	return err
 }
@@ -64,8 +74,8 @@ func (r *IndexTaskRepo) ListRunnable(ctx context.Context, limit int, now time.Ti
 	}
 	var tasks []*IndexTaskRecord
 	err := g.DB().Ctx(ctx).Model("ws_index_task").
-		Where("status = ? OR (status = ? AND (lease_expires_at IS NULL OR lease_expires_at < ?))",
-			string(domain.IndexTaskPending), string(domain.IndexTaskRunning), now).
+		Where("status = ? OR (status = ? AND (lease_expires_at IS NULL OR lease_expires_at < ?)) OR (status = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?))",
+			string(domain.IndexTaskPending), string(domain.IndexTaskRunning), now, string(domain.IndexTaskRetryWait), now).
 		Order("created_at ASC").
 		Limit(limit).
 		Scan(&tasks)
@@ -80,8 +90,8 @@ func (r *IndexTaskRepo) ClaimRunnable(ctx context.Context, tenantID, taskID, exe
 	result, err := g.DB().Model("ws_index_task").Ctx(ctx).
 		Where("tenant_id", tenantID).
 		Where("task_id", taskID).
-		Where("status = ? OR (status = ? AND (lease_expires_at IS NULL OR lease_expires_at < ?))",
-			string(domain.IndexTaskPending), string(domain.IndexTaskRunning), now).
+		Where("status = ? OR (status = ? AND (lease_expires_at IS NULL OR lease_expires_at < ?)) OR (status = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?))",
+			string(domain.IndexTaskPending), string(domain.IndexTaskRunning), now, string(domain.IndexTaskRetryWait), now).
 		Data(g.Map{
 			"status":           string(domain.IndexTaskRunning),
 			"started_at":       now,
@@ -89,6 +99,8 @@ func (r *IndexTaskRepo) ClaimRunnable(ctx context.Context, tenantID, taskID, exe
 			"execution_token":  executionToken,
 			"lease_expires_at": leaseUntil,
 			"error_msg":        "",
+			"next_attempt_at":  nil,
+			"attempt_count":    gdb.Raw("attempt_count + 1"),
 		}).Update()
 	if err != nil {
 		return false, err
@@ -123,6 +135,7 @@ func (r *IndexTaskRepo) CancelActive(ctx context.Context, tenantID, docID string
 			"finished_at":      time.Now(),
 			"execution_token":  "",
 			"lease_expires_at": nil,
+			"next_attempt_at":  nil,
 		}).Update()
 	return err
 }
@@ -185,6 +198,32 @@ func (r *IndexTaskRepo) MarkFinishedIfOwned(ctx context.Context, tenantID, taskI
 	return rows > 0, err
 }
 
+// RetryIfOwned releases a transient index failure for a bounded durable retry.
+func (r *IndexTaskRepo) RetryIfOwned(ctx context.Context, task *IndexTaskRecord, token string, retryAt time.Time, errMsg string) (bool, error) {
+	if task == nil {
+		return false, errors.New("index task is required")
+	}
+	status := string(domain.IndexTaskRetryWait)
+	finishedAt := any(nil)
+	if task.AttemptCount >= task.MaxAttempts {
+		status = string(domain.IndexTaskFailed)
+		finishedAt = time.Now()
+		retryAt = time.Time{}
+	}
+	data := g.Map{"status": status, "execution_token": "", "lease_expires_at": nil, "error_msg": redact.Summary(errMsg, 2000), "finished_at": finishedAt}
+	if status == string(domain.IndexTaskRetryWait) {
+		data["next_attempt_at"] = retryAt
+	} else {
+		data["next_attempt_at"] = nil
+	}
+	result, err := g.DB().Ctx(ctx).Model("ws_index_task").Where("tenant_id", task.TenantID).Where("task_id", task.TaskID).Where("status", string(domain.IndexTaskRunning)).Where("execution_token", token).Data(data).Update()
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
+}
+
 func (r *IndexTaskRepo) Get(ctx context.Context, tenantID, taskID string) (*IndexTaskRecord, error) {
 	var row struct {
 		TenantID       string     `json:"tenant_id"`
@@ -203,6 +242,9 @@ func (r *IndexTaskRepo) Get(ctx context.Context, tenantID, taskID string) (*Inde
 		FinishedAt     *time.Time `json:"finished_at"`
 		ExecutionToken string     `json:"execution_token"`
 		LeaseExpiresAt *time.Time `json:"lease_expires_at"`
+		AttemptCount   int        `json:"attempt_count"`
+		MaxAttempts    int        `json:"max_attempts"`
+		NextAttemptAt  *time.Time `json:"next_attempt_at"`
 		Generation     uint64     `json:"generation"`
 		CreatedAt      time.Time  `json:"created_at"`
 	}
@@ -236,7 +278,8 @@ func (r *IndexTaskRepo) Get(ctx context.Context, tenantID, taskID string) (*Inde
 		FinishedAt:     row.FinishedAt,
 		ExecutionToken: row.ExecutionToken,
 		LeaseExpiresAt: row.LeaseExpiresAt,
-		Generation:     row.Generation,
-		CreatedAt:      row.CreatedAt,
+		AttemptCount:   row.AttemptCount, MaxAttempts: row.MaxAttempts, NextAttemptAt: row.NextAttemptAt,
+		Generation: row.Generation,
+		CreatedAt:  row.CreatedAt,
 	}, nil
 }

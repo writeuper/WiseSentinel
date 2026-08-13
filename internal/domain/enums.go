@@ -32,10 +32,11 @@ const (
 type IndexTaskStatus string
 
 const (
-	IndexTaskPending IndexTaskStatus = "pending"
-	IndexTaskRunning IndexTaskStatus = "running"
-	IndexTaskSuccess IndexTaskStatus = "success"
-	IndexTaskFailed  IndexTaskStatus = "failed"
+	IndexTaskPending   IndexTaskStatus = "pending"
+	IndexTaskRunning   IndexTaskStatus = "running"
+	IndexTaskRetryWait IndexTaskStatus = "retry_wait"
+	IndexTaskSuccess   IndexTaskStatus = "success"
+	IndexTaskFailed    IndexTaskStatus = "failed"
 )
 
 // OpsTaskStatus tracks ops analysis job state.

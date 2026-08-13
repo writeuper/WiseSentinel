@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"wisesentinel-platform/internal/domain"
@@ -122,10 +123,47 @@ func (w *IndexWorker) dispatch(ctx context.Context, task *repository.IndexTaskRe
 
 		if err := w.executor.ExecuteIndexTask(runCtx, t.TenantID, t.TaskID, token); err != nil {
 			g.Log().Errorf(runCtx, "IndexWorker: execute failed for %s: %v", t.TaskID, err)
+			if isRetryableIndexError(err) {
+				attempt := t.AttemptCount
+				maxAttempts := t.MaxAttempts
+				if maxAttempts <= 0 {
+					maxAttempts = 3
+				}
+				if attempt < maxAttempts {
+					delay := indexRetryDelay(attempt)
+					if ok, retryErr := w.taskRepo.RetryIfOwned(context.Background(), &t, token, time.Now().Add(delay), err.Error()); retryErr != nil || !ok {
+						g.Log().Warningf(runCtx, "IndexWorker: retry transition failed for %s: %v", t.TaskID, retryErr)
+					}
+					return
+				}
+			}
+			_, _ = w.taskRepo.MarkFinishedIfOwned(context.Background(), t.TenantID, t.TaskID, token, string(domain.IndexTaskFailed), 0, err.Error())
 			return
 		}
 		g.Log().Infof(runCtx, "IndexWorker: finished task %s", t.TaskID)
 	}(*task, executionToken, lockKey, lockHeld)
+}
+
+func isRetryableIndexError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	if strings.Contains(text, "document deleted") || strings.Contains(text, "http 403") || strings.Contains(text, "http 404") || strings.Contains(text, "allocationquota") {
+		return false
+	}
+	return strings.Contains(text, "deadlineexceeded") || strings.Contains(text, "deadline exceeded") || strings.Contains(text, "timeout") || strings.Contains(text, "connection reset") || strings.Contains(text, "connection refused") || strings.Contains(text, "http 500") || strings.Contains(text, "http 502") || strings.Contains(text, "http 503") || strings.Contains(text, "http 504")
+}
+
+func indexRetryDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := time.Second * time.Duration(1<<(attempt-1))
+	if delay > 2*time.Minute {
+		return 2 * time.Minute
+	}
+	return delay
 }
 
 func (w *IndexWorker) startDBLeaseRenewal(cancelRun context.CancelFunc, tenantID, taskID, token string) func() {

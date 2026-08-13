@@ -142,12 +142,15 @@ CREATE TABLE IF NOT EXISTS ws_index_task (
     finished_at   DATETIME,
     execution_token VARCHAR(64) NOT NULL DEFAULT '',
 	lease_expires_at DATETIME,
+    attempt_count  INT NOT NULL DEFAULT 0,
+    max_attempts   INT NOT NULL DEFAULT 3,
+    next_attempt_at DATETIME,
     generation    BIGINT UNSIGNED NOT NULL DEFAULT 0,
     created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uk_task (tenant_id, task_id),
     UNIQUE KEY uk_index_generation (tenant_id, doc_id, generation),
     KEY idx_status (status, created_at),
-	KEY idx_index_running (status, lease_expires_at, created_at)
+	KEY idx_index_running (status, lease_expires_at, next_attempt_at, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS ws_alert_event (
