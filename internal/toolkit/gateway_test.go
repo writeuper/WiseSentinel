@@ -90,6 +90,9 @@ func TestGatewayInvokeGetCurrentTime(t *testing.T) {
 	if resp.Output == "" {
 		t.Fatal("expected non-empty output")
 	}
+	if resp.LatencyMS < 1 {
+		t.Fatalf("executed tool latency must be at least 1ms, got %d", resp.LatencyMS)
+	}
 }
 
 func TestGatewayInvokeMCPTimeConversionFallback(t *testing.T) {

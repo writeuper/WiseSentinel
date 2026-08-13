@@ -211,6 +211,12 @@ func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*
 
 	output, err := adapter(callCtx, req.Input)
 	latency := time.Since(start).Milliseconds()
+	// Persist a positive lower bound for an executed tool. Millisecond
+	// truncation turns fast local/mock calls into indistinguishable 0ms samples,
+	// which corrupts tool latency percentiles and hides small regressions.
+	if latency == 0 {
+		latency = 1
+	}
 	var (
 		respStatus = "success"
 		respOutput = output

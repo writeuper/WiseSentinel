@@ -52,6 +52,48 @@ def safe_float(value: str | None) -> float:
         return 0.0
 
 
+def percentile_ms(values: list[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, int((len(ordered) * percentile + 0.999999999) - 1)))
+    return round(ordered[index], 3)
+
+
+def aggregate_tool_latency(rows: list[list[str]]) -> dict[str, Any]:
+    """Aggregate persisted tool timings without returning input/output bodies."""
+    grouped: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    for row in rows:
+        if len(row) < 3:
+            continue
+        name = str(row[0] or "unknown")
+        status = str(row[1] or "unknown")
+        try:
+            latency = float(row[2] or 0)
+        except ValueError:
+            continue
+        if latency < 0:
+            continue
+        grouped[name].append((status, latency))
+
+    result = []
+    for name in sorted(grouped):
+        samples = grouped[name]
+        all_values = [latency for _, latency in samples]
+        success_values = [latency for status, latency in samples if status in {"success", "succeeded", "completed"}]
+        result.append({
+            "tool_name": name,
+            "calls": len(samples),
+            "successes": len(success_values),
+            "success_rate": round(len(success_values) / len(samples) * 100, 2) if samples else None,
+            "mean_ms": round(sum(all_values) / len(all_values), 3) if all_values else None,
+            "p50_ms": percentile_ms(all_values, 0.50),
+            "p95_ms": percentile_ms(all_values, 0.95),
+            "success_p95_ms": percentile_ms(success_values, 0.95),
+        })
+    return {"tool_count": len(result), "by_tool": result}
+
+
 def parse_prometheus(text: str) -> dict[str, Any]:
     """Calculate success/error-aware P95 from cumulative histogram samples.
 
@@ -209,6 +251,11 @@ def aggregate() -> dict[str, Any]:
       SELECT COUNT(*), COALESCE(SUM(CASE WHEN status IN ('success','succeeded','completed') THEN 1 ELSE 0 END),0)
       FROM ws_tool_call_record
     """)[0]
+    tool_latency_rows = mysql_query("""
+      SELECT tool_name, status, latency_ms
+      FROM ws_tool_call_record
+      WHERE latency_ms >= 0
+    """)
     metrics_text = fetch_raw_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics"))
     result: dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -224,7 +271,8 @@ def aggregate() -> dict[str, Any]:
                                     "avg_latency_ms_failed": round(safe_float(row[3]), 2),
                                     "avg_latency_ms_all": round(safe_float(row[4]), 2)} for row in latency_by_agent],
         "tool_calls": {"total": safe_int(tools[0]), "successful": safe_int(tools[1]),
-                        "success_rate": round(safe_int(tools[1]) / safe_int(tools[0]) * 100, 2) if safe_int(tools[0]) else None},
+                        "success_rate": round(safe_int(tools[1]) / safe_int(tools[0]) * 100, 2) if safe_int(tools[0]) else None,
+                        **aggregate_tool_latency(tool_latency_rows)},
         "rag_retrieval": parse_prometheus(metrics_text) if metrics_text else fetch_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics")),
         "model_generation": parse_model_prometheus(metrics_text),
     }
@@ -250,6 +298,8 @@ def main() -> int:
         print(f"- Average Agent latency (all finished): {report['trace']['avg_latency_ms_all']} ms")
         print(f"- Average Agent steps/trace: {report['steps']['avg_per_trace']}")
         print(f"- Tool success rate: {report['tool_calls']['success_rate'] if report['tool_calls']['success_rate'] is not None else 'N/A'}%")
+        for tool in report["tool_calls"]["by_tool"]:
+            print(f"- Tool {tool['tool_name']}: calls={tool['calls']}, success_rate={tool['success_rate']}%, p50={tool['p50_ms']} ms, p95={tool['p95_ms']} ms, success_p95={tool['success_p95_ms']} ms")
         rag = report["rag_retrieval"]
         print(f"- RAG retrieval samples: {rag['sample_count']}")
         print(f"- RAG successful samples: {rag.get('success_sample_count', 0)}")

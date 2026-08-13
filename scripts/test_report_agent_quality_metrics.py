@@ -67,6 +67,24 @@ ws_model_call_duration_seconds_count{operation="generate",outcome="timeout",prov
         self.assertEqual(report["success_p95_ms"], 5000.0)
         self.assertEqual(report["success_mean_ms"], 4000.0)
 
+    def test_aggregate_tool_latency_is_grouped_and_payload_free(self):
+        report = MODULE.aggregate_tool_latency([
+            ["search_logs", "success", "100"],
+            ["search_logs", "success", "200"],
+            ["search_logs", "error", "900"],
+            ["query_metric_range", "success", "50"],
+            ["query_metric_range", "completed", "70"],
+            ["ignored", "success", "-1"],
+        ])
+        self.assertEqual(report["tool_count"], 2)
+        logs = report["by_tool"][1]
+        self.assertEqual(logs["tool_name"], "search_logs")
+        self.assertEqual(logs["calls"], 3)
+        self.assertEqual(logs["successes"], 2)
+        self.assertEqual(logs["success_rate"], 66.67)
+        self.assertEqual(logs["p50_ms"], 200.0)
+        self.assertEqual(logs["p95_ms"], 900.0)
+
 
 if __name__ == "__main__":
     unittest.main()
