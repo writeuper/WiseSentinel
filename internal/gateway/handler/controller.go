@@ -739,7 +739,7 @@ func (c *ControllerV1) handleAlertmanager(ctx context.Context, receiver, status,
 		// logs. Pass only a safe diagnostic projection into the Agent prompt.
 		alertDescs = append(alertDescs, redact.Summary(desc, 1000))
 	}
-	query := fmt.Sprintf("检测到告警：%s\\n请按 Runbook 分析并生成报告。", strings.Join(alertDescs, "; "))
+	query := fmt.Sprintf("检测到告警：%s\n请按 Runbook 分析并生成报告。", strings.Join(alertDescs, "; "))
 	if status == "resolved" {
 		var taskID string
 		if c.app.AlertEventRepo != nil {
@@ -750,18 +750,39 @@ func (c *ControllerV1) handleAlertmanager(ctx context.Context, receiver, status,
 		}
 		return &v1.AlertWebhookRes{TaskID: taskID, Status: "resolved"}, nil
 	}
-	result, err := c.app.OpsAgent.Analyze(ctx, &domain.OpsAgentRequest{TenantID: tenantID, Query: query, MaxIterations: 20, Async: true, TriggerType: "webhook"})
-	if err != nil {
-		return nil, err
-	}
+	// Reserve the event before invoking the Agent. The unique tenant/event key
+	// makes concurrent Alertmanager redeliveries converge on one task instead
+	// of starting multiple model/tool workflows. Bind the reserved task ID into
+	// the Agent request so the reservation and durable task share one identity.
+	reservedTaskID := "ops_" + uuid.NewString()
+	event := &repository.AlertEvent{TenantID: tenantID, EventID: eventID, IncidentKey: incidentKey, Receiver: receiver, GroupKey: groupKey, Status: status, PayloadJSON: alertEventProjection(receiver, status, groupKey, commonLabels, commonAnnotations, externalURL, version, alerts), TaskID: reservedTaskID, ReceivedAt: time.Now()}
 	if c.app.AlertEventRepo != nil {
-		event := &repository.AlertEvent{TenantID: tenantID, EventID: eventID, IncidentKey: incidentKey, Receiver: receiver, GroupKey: groupKey, Status: status, PayloadJSON: alertEventProjection(receiver, status, groupKey, commonLabels, commonAnnotations, externalURL, version, alerts), TaskID: result.TaskID, ReceivedAt: time.Now()}
 		if err := c.app.AlertEventRepo.Create(ctx, event); err != nil {
 			if existing, getErr := c.app.AlertEventRepo.Get(ctx, tenantID, eventID); getErr == nil && existing != nil {
 				return &v1.AlertWebhookRes{TaskID: existing.TaskID, Status: existing.Status}, nil
 			}
 			return nil, err
 		}
+	}
+	result, err := c.app.OpsAgent.Analyze(ctx, &domain.OpsAgentRequest{TenantID: tenantID, TaskID: reservedTaskID, Query: query, MaxIterations: 20, Async: true, TriggerType: "webhook"})
+	if err != nil {
+		// Do not leave a permanently deduplicated event pointing at a task that
+		// was never created; a later delivery must be able to retry safely.
+		if c.app.AlertEventRepo != nil {
+			_ = c.app.AlertEventRepo.Delete(ctx, tenantID, eventID)
+		}
+		return nil, err
+	}
+	if result.TaskID == "" || result.Status == domain.OpsTaskFailed {
+		if c.app.AlertEventRepo != nil {
+			_ = c.app.AlertEventRepo.Delete(ctx, tenantID, eventID)
+		}
+		return nil, apperr.ErrAgentFailed
+	}
+	// Keep the event/task binding explicit even if a future Agent implementation
+	// normalizes or returns a different response shape.
+	if c.app.AlertEventRepo != nil && result.TaskID != reservedTaskID {
+		_ = c.app.AlertEventRepo.UpdateTaskID(ctx, tenantID, eventID, result.TaskID)
 	}
 	return &v1.AlertWebhookRes{TaskID: result.TaskID, Status: string(result.Status)}, nil
 }

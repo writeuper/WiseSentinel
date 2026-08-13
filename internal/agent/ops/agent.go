@@ -70,15 +70,24 @@ func (a *Agent) Analyze(ctx context.Context, req *domain.OpsAgentRequest) (*doma
 		traceID = trace.NewID()
 	}
 
-	taskID := "ops_" + uuid.NewString()
+	taskID := strings.TrimSpace(req.TaskID)
+	if taskID == "" {
+		taskID = "ops_" + uuid.NewString()
+	}
 	userID := ctxkeys.UserIDFrom(ctx)
 	tenantID := req.TenantID
 	if tenantID == "" {
 		tenantID = ctxkeys.TenantIDFrom(ctx)
 	}
 
-	if clarification := clarificationForQuery(req.Query); clarification != "" {
-		return &domain.OpsAgentResponse{Status: domain.OpsTaskFailed, Result: clarification, TraceID: traceID}, nil
+	// Signed Alertmanager deliveries already carry a bounded, projected alert
+	// payload. They are admitted as an operational signal even when the alert
+	// name does not match the interactive service-id heuristic; the webhook
+	// route still constrains the prompt and tool policy.
+	if req.TriggerType != "webhook" {
+		if clarification := clarificationForQuery(req.Query); clarification != "" {
+			return &domain.OpsAgentResponse{Status: domain.OpsTaskFailed, Result: clarification, TraceID: traceID}, nil
+		}
 	}
 
 	// 1. Create the task row (pending).

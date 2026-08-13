@@ -68,6 +68,15 @@ func (r *AlertEventRepo) UpdateTaskID(ctx context.Context, tenantID, eventID, ta
 	return err
 }
 
+// Delete removes a reservation created before Agent task creation failed. The
+// tenant and event predicates ensure a failed delivery cannot delete another
+// tenant's or another delivery's record.
+func (r *AlertEventRepo) Delete(ctx context.Context, tenantID, eventID string) error {
+	_, err := g.DB().Model("ws_alert_event").Ctx(ctx).
+		Where("tenant_id", tenantID).Where("event_id", eventID).Delete()
+	return err
+}
+
 func (r *AlertEventRepo) MarkResolved(ctx context.Context, tenantID, incidentKey string, resolvedAt time.Time) error {
 	_, err := g.DB().Model("ws_alert_event").Ctx(ctx).Where("tenant_id", tenantID).Where("incident_key", incidentKey).Where("status", "firing").Data(g.Map{"status": "resolved", "resolved_at": resolvedAt}).Update()
 	return err

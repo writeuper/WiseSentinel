@@ -254,8 +254,12 @@ type ChatAgentResponse struct {
 
 // OpsAgentRequest triggers ops analysis.
 type OpsAgentRequest struct {
-	TenantID      string
-	UserID        string
+	TenantID string
+	UserID   string
+	// TaskID optionally binds an externally reserved task (for example an
+	// idempotent webhook event) to the Agent execution. When empty, the Agent
+	// creates a fresh task ID.
+	TaskID        string
 	Query         string
 	MaxIterations int
 	Async         bool
