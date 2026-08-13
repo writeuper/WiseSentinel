@@ -647,6 +647,7 @@ func (m *OpenAIEinoModel) checkBreaker() error {
 		return nil
 	}
 
+	observability.ObserveModelBreakerEvent(m.provider, "rejected")
 	return fmt.Errorf("LLM circuit breaker is open (tripped after %d failures, retry in %v)",
 		breakerThreshold, breakerResetTime-time.Since(lastFailure))
 }
@@ -656,10 +657,13 @@ func (m *OpenAIEinoModel) recordSuccess() {
 	state := m.runtimeState()
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	wasOpen := state.breakerTripped || state.breakerProbeInFlight
 	state.failureCount = 0
 	state.breakerTripped = false
 	state.breakerProbeInFlight = false
-	observability.ObserveModelBreakerEvent(m.provider, "closed")
+	if wasOpen {
+		observability.ObserveModelBreakerEvent(m.provider, "closed")
+	}
 }
 
 // recordFailure increments the failure count and trips the breaker if
@@ -671,7 +675,7 @@ func (m *OpenAIEinoModel) recordFailure() {
 	state.failureCount++
 	state.lastFailureAt = time.Now()
 	state.breakerProbeInFlight = false
-	if state.failureCount >= breakerThreshold {
+	if state.failureCount >= breakerThreshold && !state.breakerTripped {
 		state.breakerTripped = true
 		observability.ObserveModelBreakerEvent(m.provider, "open")
 	}

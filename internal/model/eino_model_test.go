@@ -109,6 +109,27 @@ func TestCircuitBreakerAllowsOnlyOneHalfOpenProbe(t *testing.T) {
 	}
 }
 
+func TestCircuitBreakerEventsFollowStateTransitions(t *testing.T) {
+	m := NewOpenAIEinoModel("test", "test-model", "key", "http://localhost", time.Second)
+	for i := 0; i < breakerThreshold+2; i++ {
+		m.recordFailure()
+	}
+	state := m.runtimeState()
+	state.mu.RLock()
+	tripped, failures := state.breakerTripped, state.failureCount
+	state.mu.RUnlock()
+	if !tripped || failures != breakerThreshold+2 {
+		t.Fatalf("breaker state after repeated failures = tripped:%t failures:%d", tripped, failures)
+	}
+	m.recordSuccess()
+	state.mu.RLock()
+	tripped, failures = state.breakerTripped, state.failureCount
+	state.mu.RUnlock()
+	if tripped || failures != 0 {
+		t.Fatalf("breaker state after recovery = tripped:%t failures:%d", tripped, failures)
+	}
+}
+
 func TestStreamUsesProfileTimeoutForCompleteBody(t *testing.T) {
 	started := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
