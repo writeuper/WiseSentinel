@@ -253,6 +253,19 @@ def parse_model_prometheus(text: str) -> dict[str, Any]:
     }
 
 
+def parse_breaker_events(text: str) -> dict[str, int]:
+    """Aggregate low-cardinality breaker transition events by event type."""
+    events = {name: 0 for name in ("open", "rejected", "probe", "closed")}
+    for line in text.splitlines():
+        if line.startswith("#") or not line.startswith("ws_model_breaker_events_total{"):
+            continue
+        match = re.search(r'event="(open|rejected|probe|closed)"[^ ]*\s+([0-9.eE+-]+)$', line)
+        if match:
+            events[match.group(1)] += int(float(match.group(2)))
+    events["total"] = sum(events.values())
+    return events
+
+
 def fetch_raw_metrics(url: str) -> str:
     try:
         with urllib.request.urlopen(url, timeout=10) as response:
@@ -352,6 +365,7 @@ def aggregate() -> dict[str, Any]:
         "rag_retrieval": parse_prometheus(metrics_text) if metrics_text else fetch_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics")),
         "rag_inventory": parse_rag_inventory(metrics_text),
         "model_generation": parse_model_prometheus(metrics_text),
+        "model_breaker": parse_breaker_events(metrics_text),
     }
     return result
 
@@ -394,6 +408,8 @@ def main() -> int:
         if rag.get("p95_semantics"):
             print("- RAG P95 semantics: histogram bucket upper bound (not an exact percentile)")
         model = report["model_generation"]
+        breaker = report["model_breaker"]
+        print(f"- Model breaker events: open={breaker['open']}, rejected={breaker['rejected']}, probe={breaker['probe']}, closed={breaker['closed']}")
         print(f"- Model generation samples: {model['sample_count']}")
         print(f"- Model generation success samples: {model['success_sample_count']}")
         print(f"- Model generation timeout samples: {model['timeout_sample_count']}")

@@ -78,6 +78,17 @@ ws_model_call_duration_seconds_count{operation="generate",outcome="timeout",prov
         self.assertEqual(report["success_p95_ms"], 5000.0)
         self.assertEqual(report["success_mean_ms"], 4000.0)
 
+    def test_parse_breaker_events_is_bounded_and_aggregated(self):
+        report = MODULE.parse_breaker_events("""
+ws_model_breaker_events_total{event="open",provider="openai"} 2
+ws_model_breaker_events_total{event="rejected",provider="openai"} 5
+ws_model_breaker_events_total{event="probe",provider="openai"} 1
+ws_model_breaker_events_total{event="closed",provider="openai"} 1
+ws_model_breaker_events_total{event="open",provider="other"} 3
+ws_model_breaker_events_total{event="unknown",provider="secret"} 99
+""")
+        self.assertEqual(report, {"open": 5, "rejected": 5, "probe": 1, "closed": 1, "total": 12})
+
     def test_aggregate_tool_latency_is_grouped_and_payload_free(self):
         report = MODULE.aggregate_tool_latency([
             ["search_logs", "success", "100"],
