@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 
+	"wisesentinel-platform/internal/domain"
 	"wisesentinel-platform/internal/pkg/storage"
 
 	"github.com/cloudwego/eino/components/document"
@@ -58,8 +60,9 @@ func (l *FileLoader) Load(ctx context.Context, src document.Source, _ ...documen
 	if req.Layer != "" {
 		meta["_layer"] = string(req.Layer)
 	}
-	if req.Version != "" {
-		meta["version"] = req.Version
+	version := documentVersion(req)
+	if version != "" {
+		meta["version"] = version
 	}
 	if req.Service != "" {
 		meta["service"] = req.Service
@@ -68,4 +71,20 @@ func (l *FileLoader) Load(ctx context.Context, src document.Source, _ ...documen
 		Content:  string(raw),
 		MetaData: meta,
 	}}, nil
+}
+
+func documentVersion(req *domain.IndexTaskRequest) string {
+	if req == nil {
+		return ""
+	}
+	if req.Version != "" {
+		return req.Version
+	}
+	if req.Generation > 0 {
+		// Ordinary uploads do not carry a business version. Expose the durable
+		// generation as a stable, auditable Citation version instead of leaving
+		// newly published documents indistinguishable from legacy vectors.
+		return "generation-" + strconv.FormatUint(req.Generation, 10)
+	}
+	return ""
 }

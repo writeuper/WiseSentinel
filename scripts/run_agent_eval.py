@@ -305,8 +305,11 @@ def run_knowledge_flow(client: EvalClient, case_id: str, timeout_seconds: int) -
         try:
             chat = client.post("/chat", {"session_id": session_id, "question": f"请根据知识库说明 marker {marker} 的上传索引流程。", "options": {"enable_rag": True, "enable_tools": False}}, tenant_id=client.knowledge_tenant_id)
             citations = chat.get("citations") or []
-            if not any(citation.get("doc_id") == doc_id for citation in citations):
+            uploaded_citations = [citation for citation in citations if citation.get("doc_id") == doc_id]
+            if not uploaded_citations:
                 raise RuntimeError("RAG citation did not reference uploaded document")
+            if not any(isinstance(citation.get("version"), str) and citation.get("version", "").strip() for citation in uploaded_citations):
+                raise RuntimeError("RAG citation for uploaded document has no version")
             chat_text = normalize_text(chat.get("answer"))
             citation_text = normalize_text(citations)
             if marker not in chat_text and marker not in citation_text:
@@ -322,7 +325,7 @@ def run_knowledge_flow(client: EvalClient, case_id: str, timeout_seconds: int) -
         remaining = client.list_knowledge()
         if any(item.get("doc_id") == doc_id for item in remaining.get("items") or []):
             raise RuntimeError("deleted document still exists in list")
-        return "knowledge", "upload_knowledge:success|index_task:success|chat_rag_citation:success|delete_knowledge:success", normalize_text({"upload": uploaded, "index": task, "chat": chat, "delete": deleted, "remaining": remaining})
+        return "knowledge", "upload_knowledge:success|index_task:success|chat_rag_citation:success|citation_version:success|delete_knowledge:success", normalize_text({"upload": uploaded, "index": task, "chat": chat, "delete": deleted, "remaining": remaining})
     finally:
         if not document_deleted:
             cleanup = client.delete_knowledge(doc_id)

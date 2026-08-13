@@ -67,6 +67,10 @@ class EvalSessionCleanupTests(unittest.TestCase):
         self.assertTrue(MODULE.has_knowledge_workflow_evidence("正在查询文档", [{"snippet": "上传索引流程：调用 query_internal_docs"}]))
         self.assertFalse(MODULE.has_knowledge_workflow_evidence("正在查询文档", [{"snippet": "无关内容"}]))
 
+    def test_citation_quality_requires_uploaded_document_version_in_workflow_contract(self) -> None:
+        citations = [{"doc_id": "uploaded", "version": "generation-1", "chunk_id": "c", "source": "s", "snippet": "x"}]
+        self.assertTrue(any(c.get("doc_id") == "uploaded" and c.get("version") for c in citations))
+
     def test_call_chat_deletes_exact_session_after_success(self) -> None:
         client = object.__new__(MODULE.EvalClient)
         client.tenant_id = "eval-tenant"
