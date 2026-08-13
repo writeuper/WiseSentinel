@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"wisesentinel-platform/internal/domain"
+	"wisesentinel-platform/internal/observability"
 	"wisesentinel-platform/internal/pkg/apperr"
 	"wisesentinel-platform/internal/pkg/ctxkeys"
 	"wisesentinel-platform/internal/pkg/redact"
@@ -168,6 +169,10 @@ func (gw *Gateway) ListTools(ctx context.Context, tenantID string, agentType dom
 
 // Invoke calls a tool adapter with timeout and risk checks.
 func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*domain.ToolInvokeResponse, error) {
+	started := time.Now()
+	observe := func(outcome string) {
+		observability.ObserveToolCall(req.ToolName, string(req.AgentType), outcome, time.Since(started).Seconds())
+	}
 	gw.mu.RLock()
 	meta, ok := gw.tools[req.ToolName]
 	adapter, hasAdapter := gw.adapters[req.ToolName]
@@ -175,9 +180,11 @@ func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*
 	gw.mu.RUnlock()
 
 	if !ok || !meta.Enabled {
+		observe("unavailable")
 		return nil, apperr.New(50003, 500, fmt.Sprintf("tool %q is not available", req.ToolName))
 	}
 	if !hasAdapter {
+		observe("unavailable")
 		return nil, apperr.New(50003, 500, fmt.Sprintf("tool %q has no adapter", req.ToolName))
 	}
 
@@ -189,8 +196,10 @@ func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*
 	// all L2 calls until that workflow is available (including admins, so an
 	// admin role cannot bypass the missing evidence/approval boundary).
 	if meta.RiskLevel == domain.ToolRiskL2Write {
+		observe("rejected")
 		return nil, apperr.ErrHighRiskWorkflowUnavailable
 	} else if err := gw.checkRiskLevel(ctx, meta.RiskLevel); err != nil {
+		observe("rejected")
 		return nil, err
 	}
 
@@ -221,6 +230,15 @@ func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*
 		respStatus = "success"
 		respOutput = output
 	)
+	if err != nil {
+		if ctxErr := callCtx.Err(); ctxErr != nil {
+			observe("timeout")
+		} else {
+			observe("error")
+		}
+	} else {
+		observe("success")
+	}
 	if err != nil {
 		// region debug-point p1-p2-tool-error
 		g.Log().Warningf(ctx, "[p1-p2-tool-error] trace=%s tool=%s agent=%s status=error cause=%s", req.TraceID, req.ToolName, req.AgentType, redact.TelemetryProjection(err.Error()))
