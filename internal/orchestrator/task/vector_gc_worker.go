@@ -103,6 +103,13 @@ func (w *VectorGCWorker) tick(parent context.Context) {
 			for _, status := range []string{"pending", "running", "retry_wait", "succeeded", "skipped", "dead"} {
 				observability.SetVectorGCTasks(status, counts[status])
 			}
+			if recent, err := reporter.(interface {
+				CountDeadSince(context.Context, time.Time) (int, error)
+			}).CountDeadSince(ctx, time.Now().Add(-24*time.Hour)); err != nil {
+				g.Log().Warningf(ctx, "VectorGCWorker: recent dead metric snapshot failed: %s", redact.Summary(err.Error(), 500))
+			} else {
+				observability.SetVectorGCDeadRecent(recent)
+			}
 		}
 	}
 	for _, task := range tasks {

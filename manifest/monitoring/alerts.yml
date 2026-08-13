@@ -36,14 +36,14 @@ groups:
           description: HTTP p95 latency is above 1 second for more than 10 minutes.
 
       - alert: WiseSentinelRAGVectorGCDeadLetter
-        expr: ws_rag_vector_gc_tasks{status="dead"} > 0
+        expr: ws_rag_vector_gc_dead_tasks_24h > 0
         for: 5m
         labels:
           severity: warning
           component: rag
         annotations:
           summary: WiseSentinel RAG vector-GC has dead-letter tasks
-          description: At least one vector cleanup task exhausted its retry budget. Inspect the tenant-scoped Vector GC administration queue and use the approval-controlled redrive flow.
+          description: A vector cleanup task entered dead-letter state within the last 24 hours. Inspect the tenant-scoped Vector GC administration queue and use the approval-controlled redrive flow. Historical dead backlog is tracked separately.
 
       - alert: WiseSentinelRAGVectorGCRetryBacklog
         expr: ws_rag_vector_gc_tasks{status="retry_wait"} > 20

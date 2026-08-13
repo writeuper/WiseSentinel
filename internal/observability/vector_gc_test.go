@@ -7,13 +7,17 @@ import (
 func TestVectorGCMetricsExposeLowCardinalityStateAndOutcome(t *testing.T) {
 	SetVectorGCTasks("dead", 3)
 	ObserveVectorGCAttempt("generation", "dead")
+	SetVectorGCDeadRecent(4)
 	families, err := Registry.Gather()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var foundGauge, foundCounter bool
+	var foundGauge, foundCounter, foundRecent bool
 	for _, family := range families {
 		for _, metric := range family.Metric {
+			if family.GetName() == "ws_rag_vector_gc_dead_tasks_24h" && metric.Gauge.GetValue() == 4 {
+				foundRecent = true
+			}
 			for _, label := range metric.Label {
 				if label.GetName() != "status" || label.GetValue() != "dead" {
 					continue
@@ -38,7 +42,7 @@ func TestVectorGCMetricsExposeLowCardinalityStateAndOutcome(t *testing.T) {
 			}
 		}
 	}
-	if !foundGauge || !foundCounter {
-		t.Fatalf("GC metrics missing: gauge=%v counter=%v", foundGauge, foundCounter)
+	if !foundGauge || !foundCounter || !foundRecent {
+		t.Fatalf("GC metrics missing: gauge=%v counter=%v recent=%v", foundGauge, foundCounter, foundRecent)
 	}
 }

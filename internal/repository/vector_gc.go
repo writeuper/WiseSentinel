@@ -76,6 +76,15 @@ func (r *VectorGCRepo) CountByStatus(ctx context.Context) (map[string]int, error
 	return counts, nil
 }
 
+// CountDeadSince reports newly dead-lettered tasks in a bounded time window.
+// It complements the total dead gauge, which intentionally includes historical
+// backlog for administrative cleanup but is too noisy for incident alerts.
+func (r *VectorGCRepo) CountDeadSince(ctx context.Context, since time.Time) (int, error) {
+	count, err := g.DB().Ctx(ctx).Model("ws_rag_vector_gc_task").
+		Where("status", "dead").WhereGTE("updated_at", since).Count()
+	return count, err
+}
+
 func (r *VectorGCRepo) Get(ctx context.Context, tenantID, docID, targetKey string) (*VectorGCTask, error) {
 	var task VectorGCTask
 	err := g.DB().Ctx(ctx).Model("ws_rag_vector_gc_task").

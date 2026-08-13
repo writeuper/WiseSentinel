@@ -17,9 +17,13 @@ var (
 		},
 		[]string{"target_kind", "outcome"},
 	)
+	vectorGCDeadRecent = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "ws_rag_vector_gc_dead_tasks_24h",
+		Help: "Vector-GC tasks transitioned to dead within the last 24 hours.",
+	})
 )
 
-func init() { Registry.MustRegister(vectorGCTasks, vectorGCAttempts) }
+func init() { Registry.MustRegister(vectorGCTasks, vectorGCAttempts, vectorGCDeadRecent) }
 
 // SetVectorGCTasks reports aggregate, deliberately tenant-free queue state.
 func SetVectorGCTasks(status string, count int) {
@@ -31,4 +35,10 @@ func SetVectorGCTasks(status string, count int) {
 
 func ObserveVectorGCAttempt(targetKind, outcome string) {
 	vectorGCAttempts.WithLabelValues(targetKind, outcome).Inc()
+}
+
+func SetVectorGCDeadRecent(count int) {
+	if count >= 0 {
+		vectorGCDeadRecent.Set(float64(count))
+	}
 }
