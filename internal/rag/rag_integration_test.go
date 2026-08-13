@@ -388,6 +388,9 @@ func TestPipelineIncrementalReindex(t *testing.T) {
 		if generation, ok := doc.Metadata["generation"].(float64); !ok || generation != 2 {
 			t.Fatalf("retrieved generation = %#v, want 2", doc.Metadata["generation"])
 		}
+		if version, ok := doc.Metadata["version"].(string); !ok || version != "generation-2" {
+			t.Fatalf("retrieved version = %#v, want generation-2", doc.Metadata["version"])
+		}
 	}
 }
 
