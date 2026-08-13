@@ -183,11 +183,30 @@ func (a *Agent) executeTask(ctx context.Context, tenantID, taskID, traceID, exec
 			finishStatus = "timeout"
 		}
 		if status == domain.OpsTaskTimeout || !allowRetry {
-			_, _ = a.taskRepo.FinishIfOwned(ctx, tenantID, taskID, executionToken,
+			finished, persistErr := a.taskRepo.FinishIfOwned(ctx, tenantID, taskID, executionToken,
 				string(status), finishErr, payload)
-		} else if task, getErr := a.taskRepo.Get(ctx, tenantID, taskID); getErr == nil && task != nil {
-			_, _, _ = a.taskRepo.RetryOrFailIfOwned(ctx, tenantID, taskID, executionToken,
+			if persistErr != nil {
+				return nil, apperr.Wrap(persistErr, apperr.ErrInternal)
+			}
+			if !finished {
+				return nil, apperr.ErrAgentFailed
+			}
+		} else {
+			task, getErr := a.taskRepo.Get(ctx, tenantID, taskID)
+			if getErr != nil {
+				return nil, apperr.Wrap(getErr, apperr.ErrInternal)
+			}
+			if task == nil {
+				return nil, apperr.ErrNotFound
+			}
+			_, changed, retryErr := a.taskRepo.RetryOrFailIfOwned(ctx, tenantID, taskID, executionToken,
 				finishErr, time.Now().Add(repository.RetryBackoff(task.RetryCount)))
+			if retryErr != nil {
+				return nil, apperr.Wrap(retryErr, apperr.ErrInternal)
+			}
+			if !changed {
+				return nil, apperr.ErrAgentFailed
+			}
 		}
 		return nil, apperr.Wrap(err, apperr.ErrAgentFailed)
 	}
@@ -197,9 +216,13 @@ func (a *Agent) executeTask(ctx context.Context, tenantID, taskID, traceID, exec
 	finished, persistErr := a.taskRepo.FinishIfOwned(ctx, tenantID, taskID, executionToken,
 		string(domain.OpsTaskSuccess), redact.Summary(result, 8000), payload)
 	if persistErr != nil {
+		finishStatus = "failed"
+		finishErr = redact.Summary(persistErr.Error(), 1000)
 		return nil, apperr.Wrap(persistErr, apperr.ErrInternal)
 	}
 	if !finished {
+		finishStatus = "failed"
+		finishErr = "ops task execution lease was lost before success persistence"
 		return nil, apperr.ErrAgentFailed
 	}
 	a.createKnowledgeDraft(ctx, tenantID, req.UserID, taskID, traceID, req.Query, evidence, conclusion)
