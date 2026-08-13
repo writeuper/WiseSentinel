@@ -124,18 +124,21 @@ func (w *IndexWorker) dispatch(ctx context.Context, task *repository.IndexTaskRe
 		if err := w.executor.ExecuteIndexTask(runCtx, t.TenantID, t.TaskID, token); err != nil {
 			g.Log().Errorf(runCtx, "IndexWorker: execute failed for %s: %v", t.TaskID, err)
 			if isRetryableIndexError(err) {
-				attempt := t.AttemptCount
+				// ClaimRunnable increments the durable attempt counter in MySQL;
+				// the list result is the value before this execution.
+				attempt := t.AttemptCount + 1
 				maxAttempts := t.MaxAttempts
 				if maxAttempts <= 0 {
 					maxAttempts = 3
 				}
-				if attempt < maxAttempts {
-					delay := indexRetryDelay(attempt)
-					if ok, retryErr := w.taskRepo.RetryIfOwned(context.Background(), &t, token, time.Now().Add(delay), err.Error()); retryErr != nil || !ok {
-						g.Log().Warningf(runCtx, "IndexWorker: retry transition failed for %s: %v", t.TaskID, retryErr)
-					}
-					return
+				retryTask := t
+				retryTask.AttemptCount = attempt
+				retryTask.MaxAttempts = maxAttempts
+				delay := indexRetryDelay(attempt)
+				if ok, retryErr := w.taskRepo.RetryIfOwned(context.Background(), &retryTask, token, time.Now().Add(delay), err.Error()); retryErr != nil || !ok {
+					g.Log().Warningf(runCtx, "IndexWorker: retry transition failed for %s: %v", t.TaskID, retryErr)
 				}
+				return
 			}
 			_, _ = w.taskRepo.MarkFinishedIfOwned(context.Background(), t.TenantID, t.TaskID, token, string(domain.IndexTaskFailed), 0, err.Error())
 			return

@@ -190,7 +190,9 @@ func (s *Service) ExecuteIndexTask(ctx context.Context, tenantID, taskID, execut
 		safeSource := redact.Summary(record.SourceURI, 500)
 		safeErr := redact.Summary(err.Error(), 1000)
 		g.Log().Errorf(ctx, "RAG index task failed: task_id=%s doc_id=%s source=%s cause=%s", taskID, record.DocID, safeSource, safeErr)
-		_, _ = s.tasks.MarkFinishedIfOwned(ctx, tenantID, taskID, executionToken, string(domain.IndexTaskFailed), 0, safeErr)
+		// The IndexWorker owns the terminal transition. It classifies transient
+		// dependency failures into retry_wait and only marks non-retryable
+		// failures terminal; doing a failed CAS here would prevent durable retry.
 		return apperr.Wrap(err, apperr.ErrRAGFailed)
 	}
 	published, err := s.states.PublishIfOwned(ctx, tenantID, taskID, executionToken, chunkCount)

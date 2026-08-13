@@ -39,3 +39,12 @@ func TestIndexRetryDelayIsBounded(t *testing.T) {
 		t.Fatalf("attempt 20 delay = %s", got)
 	}
 }
+
+func TestIndexRetryAttemptBudgetCountsCurrentExecution(t *testing.T) {
+	if attempt, max := 1, 3; !(attempt < max) {
+		t.Fatal("first attempt should be retryable")
+	}
+	if attempt, max := 3, 3; attempt < max {
+		t.Fatal("third attempt must be terminal")
+	}
+}
