@@ -63,6 +63,37 @@ func TestHandlersRejectNilAgentRequests(t *testing.T) {
 	}
 }
 
+func TestHandlersRejectNilManagementRequests(t *testing.T) {
+	controller := NewV1(nil)
+	ctx := context.Background()
+	checks := []struct {
+		name string
+		call func() error
+	}{
+		{"auth_token", func() error { _, err := controller.AuthToken(ctx, nil); return err }},
+		{"create_session", func() error { _, err := controller.CreateSession(ctx, nil); return err }},
+		{"list_sessions", func() error { _, err := controller.ListSessions(ctx, nil); return err }},
+		{"get_session_messages", func() error { _, err := controller.GetSessionMessages(ctx, nil); return err }},
+		{"delete_session", func() error { _, err := controller.DeleteSession(ctx, nil); return err }},
+		{"get_ops_task", func() error { _, err := controller.GetOpsTask(ctx, nil); return err }},
+		{"list_ops_tasks", func() error { _, err := controller.ListOpsTasks(ctx, nil); return err }},
+		{"list_approvals", func() error { _, err := controller.ListApprovals(ctx, nil); return err }},
+		{"approval_decision", func() error { _, err := controller.ApprovalDecision(ctx, nil); return err }},
+		{"list_vector_gc", func() error { _, err := controller.ListVectorGCTasks(ctx, nil); return err }},
+		{"request_vector_gc_redrive", func() error { _, err := controller.RequestVectorGCRedrive(ctx, nil); return err }},
+		{"list_agent_configs", func() error { _, err := controller.ListAgentConfigs(ctx, nil); return err }},
+		{"activate_agent_config", func() error { _, err := controller.ActivateAgentConfig(ctx, nil); return err }},
+		{"get_trace", func() error { _, err := controller.GetTrace(ctx, nil); return err }},
+	}
+	for _, tc := range checks {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.call(); err == nil {
+				t.Fatal("nil request must return an error")
+			}
+		})
+	}
+}
+
 func TestRequestTextLimitsRejectOversizedPromptAndComment(t *testing.T) {
 	for name, value := range map[string]struct {
 		value string

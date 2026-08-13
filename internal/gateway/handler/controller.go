@@ -46,6 +46,9 @@ func NewV1(app *bootstrap.App) *ControllerV1 {
 // carries the actual RBAC roles. Falls back to "operator" if the user
 // has no row in the role table (or the table is empty).
 func (c *ControllerV1) AuthToken(ctx context.Context, req *v1.AuthTokenReq) (*v1.AuthTokenRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("APP_ENV")), "production") {
 		return nil, apperr.ErrUnauthorized
 	}
@@ -126,6 +129,9 @@ func lookupUserRoles(ctx context.Context, tenantID, userID string) []string {
 
 // CreateSession creates a new conversation session.
 func (c *ControllerV1) CreateSession(ctx context.Context, req *v1.CreateSessionReq) (*v1.CreateSessionRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	if err := validateBoundedText(req.Title, maxSessionTitleRunes); err != nil {
 		return nil, err
 	}
@@ -157,6 +163,9 @@ func (c *ControllerV1) CreateSession(ctx context.Context, req *v1.CreateSessionR
 
 // ListSessions lists user sessions.
 func (c *ControllerV1) ListSessions(ctx context.Context, req *v1.ListSessionsReq) (*v1.ListSessionsRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	tenantID := ctxkeys.TenantIDFrom(ctx)
 	userID := ctxkeys.UserIDFrom(ctx)
 	if userID == "" {
@@ -183,6 +192,9 @@ func (c *ControllerV1) ListSessions(ctx context.Context, req *v1.ListSessionsReq
 
 // GetSessionMessages returns messages for a session.
 func (c *ControllerV1) GetSessionMessages(ctx context.Context, req *v1.GetSessionMessagesReq) (*v1.GetSessionMessagesRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	tenantID := ctxkeys.TenantIDFrom(ctx)
 	if err := c.requireSessionRead(ctx, tenantID, req.SessionID); err != nil {
 		return nil, err
@@ -216,6 +228,9 @@ func (c *ControllerV1) GetSessionMessages(ctx context.Context, req *v1.GetSessio
 // check used by chat and history reads. The server, not the client, remains
 // the authorization authority.
 func (c *ControllerV1) DeleteSession(ctx context.Context, req *v1.DeleteSessionReq) (*v1.DeleteSessionRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	tenantID := ctxkeys.TenantIDFrom(ctx)
 	if err := c.requireSessionRead(ctx, tenantID, req.SessionID); err != nil {
 		return nil, err
@@ -643,6 +658,9 @@ func (c *ControllerV1) OpsAnalyze(ctx context.Context, req *v1.OpsAnalyzeReq) (*
 
 // GetOpsTask returns an ops task status.
 func (c *ControllerV1) GetOpsTask(ctx context.Context, req *v1.GetOpsTaskReq) (*v1.GetOpsTaskRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	tenantID := ctxkeys.TenantIDFrom(ctx)
 	task, err := c.app.OpsTaskRepo.Get(ctx, tenantID, req.TaskID)
 	if err != nil {
@@ -670,6 +688,9 @@ func (c *ControllerV1) GetOpsTask(ctx context.Context, req *v1.GetOpsTaskReq) (*
 
 // ListOpsTasks returns a page of recent ops tasks for the tenant.
 func (c *ControllerV1) ListOpsTasks(ctx context.Context, req *v1.ListOpsTasksReq) (*v1.ListOpsTasksRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	tenantID := ctxkeys.TenantIDFrom(ctx)
 	var (
 		items []*repository.OpsTask
@@ -866,6 +887,9 @@ func filterAlertFields(values map[string]string, allowlist map[string]struct{}) 
 
 // ListApprovals lists pending approvals.
 func (c *ControllerV1) ListApprovals(ctx context.Context, req *v1.ListApprovalsReq) (*v1.ListApprovalsRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	tenantID := ctxkeys.TenantIDFrom(ctx)
 	if err := c.app.ApprovalRepo.ExpireStale(ctx); err != nil {
 		return nil, apperr.Wrap(err, apperr.ErrInternal)
@@ -912,6 +936,9 @@ func approvalTargetProjection(approval *repository.Approval) *v1.ApprovalTarget 
 
 // ApprovalDecision submits an approval decision.
 func (c *ControllerV1) ApprovalDecision(ctx context.Context, req *v1.ApprovalDecisionReq) (*v1.ApprovalDecisionRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	if err := validateBoundedText(req.Comment, maxCommentRunes); err != nil {
 		return nil, err
 	}
@@ -980,6 +1007,9 @@ func approvalRequiresDedicatedExecution(approvalType string) bool {
 // ListVectorGCTasks exposes tenant-scoped dead-letter diagnosis to platform
 // administrators. It intentionally projects only redacted error summaries.
 func (c *ControllerV1) ListVectorGCTasks(ctx context.Context, req *v1.ListVectorGCTasksReq) (*v1.ListVectorGCTasksRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	tenantID := ctxkeys.TenantIDFrom(ctx)
 	tasks, total, err := c.app.VectorGCRepo.List(ctx, tenantID, req.Status, req.Page, req.Size)
 	if err != nil {
@@ -1004,6 +1034,9 @@ func (c *ControllerV1) ListVectorGCTasks(ctx context.Context, req *v1.ListVector
 // target. A different administrator must approve it before it can re-enter the
 // worker queue, retaining tenant isolation and separation of duties.
 func (c *ControllerV1) RequestVectorGCRedrive(ctx context.Context, req *v1.RequestVectorGCRedriveReq) (*v1.RequestVectorGCRedriveRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	tenantID, userID := ctxkeys.TenantIDFrom(ctx), ctxkeys.UserIDFrom(ctx)
 	payload, err := json.Marshal(map[string]string{
 		"doc_id": req.DocID, "target_key": req.TargetKey, "requested_by": userID, "reason": redact.Summary(req.Reason, 500),
@@ -1028,6 +1061,9 @@ func (c *ControllerV1) RequestVectorGCRedrive(ctx context.Context, req *v1.Reque
 
 // ListAgentConfigs lists agent configuration versions.
 func (c *ControllerV1) ListAgentConfigs(ctx context.Context, req *v1.ListAgentConfigsReq) (*v1.ListAgentConfigsRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	tenantID := ctxkeys.TenantIDFrom(ctx)
 
 	type configRow struct {
@@ -1061,6 +1097,9 @@ func (c *ControllerV1) ListAgentConfigs(ctx context.Context, req *v1.ListAgentCo
 
 // ActivateAgentConfig activates a config version.
 func (c *ControllerV1) ActivateAgentConfig(ctx context.Context, req *v1.ActivateAgentConfigReq) (*v1.ActivateAgentConfigRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	tenantID := ctxkeys.TenantIDFrom(ctx)
 
 	// Deactivate all active configs for this agent type
@@ -1216,6 +1255,9 @@ func isInsufficientOpsContext(query string) bool {
 }
 
 func (c *ControllerV1) GetTrace(ctx context.Context, req *v1.GetTraceReq) (*v1.GetTraceRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
 	if c.app.TraceRepo == nil {
 		return nil, apperr.ErrNotFound
 	}
