@@ -40,6 +40,10 @@ func main() {
 		app.VectorGCWorker.Start(ctx)
 		g.Log().Info(ctx, "VectorGCWorker started")
 	}
+	if app.AlertEventReaper != nil {
+		app.AlertEventReaper.Start(ctx)
+		g.Log().Info(ctx, "AlertEventReaper started")
+	}
 
 	s := g.Server()
 	s.SetSessionStorage(gsession.NewStorageMemory())

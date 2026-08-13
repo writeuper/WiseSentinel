@@ -54,3 +54,13 @@ groups:
         annotations:
           summary: WiseSentinel RAG vector-GC retry backlog is elevated
           description: More than 20 cleanup tasks are waiting for retry for 15 minutes. Check Milvus availability and cleanup worker health.
+
+      - alert: WiseSentinelAlertEventOrphanReservations
+        expr: increase(ws_alert_event_orphan_reaped_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: webhook
+        annotations:
+          summary: WiseSentinel reclaimed orphan Alertmanager reservations
+          description: One or more signed Webhook reservations survived without an Ops task and were reclaimed. Inspect process restarts, database errors, and task-creation latency.

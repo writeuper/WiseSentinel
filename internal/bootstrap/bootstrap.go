@@ -59,6 +59,7 @@ type App struct {
 	OpsWorker          *task.OpsWorker
 	IndexWorker        *task.IndexWorker
 	VectorGCWorker     *task.VectorGCWorker
+	AlertEventReaper   *task.AlertEventReaper
 	VectorGCRepo       *repository.VectorGCRepo
 	MCPTimeClient      *mcpclient.StdioClient
 }
@@ -113,6 +114,7 @@ func Init(ctx context.Context) (*App, error) {
 		observability.ObserveAlertEventOrphanReaped(reaped)
 		g.Log().Infof(ctx, "reaped orphan Alertmanager reservations: %d", reaped)
 	}
+	alertEventReaper := task.NewAlertEventReaper(alertEventRepo)
 
 	// Model Router
 	modelRouter := model.NewRouter(ctx)
@@ -274,6 +276,7 @@ func Init(ctx context.Context) (*App, error) {
 		OpsWorker:          opsWorker,
 		IndexWorker:        indexWorker,
 		VectorGCWorker:     vectorGCWorker,
+		AlertEventReaper:   alertEventReaper,
 		VectorGCRepo:       vectorGCRepo,
 		MCPTimeClient:      mcpTimeClient,
 	}, nil
@@ -305,17 +308,18 @@ func (a *App) Ready(ctx context.Context) map[string]string {
 	probeCtx, cancel := context.WithTimeout(ctx, readinessProbeTimeout)
 	defer cancel()
 	status := map[string]string{
-		"mysql":            componentStatus(pingMySQL(probeCtx)),
-		"redis":            componentStatus(pingRedis(probeCtx)),
-		"milvus":           "skipped",
-		"prometheus":       dataSourceStatus(probeCtx, "prometheus.base_url", "PROMETHEUS_URL"),
-		"logs":             dataSourceStatus(probeCtx, "mcp.log.url", "MCP_LOG_URL"),
-		"deployments":      dataSourceStatus(probeCtx, "deployment.base_url", "DEPLOYMENT_BASE_URL"),
-		"ops_worker":       workerStatus(a.OpsWorker != nil),
-		"index_worker":     workerStatus(a.IndexWorker != nil),
-		"vector_gc_worker": workerStatus(a.VectorGCWorker != nil),
-		"chat_model":       modelStatus(probeCtx, a.ModelRouter, domain.ModelProfileChatFast),
-		"ops_model":        modelStatus(probeCtx, a.ModelRouter, domain.ModelProfileOpsExec),
+		"mysql":              componentStatus(pingMySQL(probeCtx)),
+		"redis":              componentStatus(pingRedis(probeCtx)),
+		"milvus":             "skipped",
+		"prometheus":         dataSourceStatus(probeCtx, "prometheus.base_url", "PROMETHEUS_URL"),
+		"logs":               dataSourceStatus(probeCtx, "mcp.log.url", "MCP_LOG_URL"),
+		"deployments":        dataSourceStatus(probeCtx, "deployment.base_url", "DEPLOYMENT_BASE_URL"),
+		"ops_worker":         workerStatus(a.OpsWorker != nil),
+		"index_worker":       workerStatus(a.IndexWorker != nil),
+		"vector_gc_worker":   workerStatus(a.VectorGCWorker != nil),
+		"alert_event_reaper": workerStatus(a.AlertEventReaper != nil),
+		"chat_model":         modelStatus(probeCtx, a.ModelRouter, domain.ModelProfileChatFast),
+		"ops_model":          modelStatus(probeCtx, a.ModelRouter, domain.ModelProfileOpsExec),
 	}
 	if a.Milvus != nil {
 		status["milvus"] = componentStatus(a.Milvus.Ping(probeCtx))
