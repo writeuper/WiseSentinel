@@ -120,3 +120,27 @@ func TestModelBreakerEventsUseBoundedLabels(t *testing.T) {
 	}
 	t.Fatal("bounded breaker metric labels not found")
 }
+
+func TestModelTokenMetricsUseBoundedLabelsAndIgnoreMissingUsage(t *testing.T) {
+	ObserveModelTokens("provider-with-secret", "generate", 12, 7, 19)
+	ObserveModelTokens("provider-with-secret", "stream_complete", 0, -1, 0)
+	families, err := Registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "ws_model_tokens_total" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			labels := map[string]string{}
+			for _, label := range metric.Label {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if labels["provider"] == "other" && labels["operation"] == "generate" && metric.Counter.GetValue() > 0 {
+				return
+			}
+		}
+	}
+	t.Fatal("bounded model token metric not found")
+}

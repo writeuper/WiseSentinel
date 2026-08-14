@@ -51,10 +51,17 @@ var (
 		},
 		[]string{"provider", "event"},
 	)
+	modelTokens = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ws_model_tokens_total",
+			Help: "Model token usage by bounded provider class, operation and token type.",
+		},
+		[]string{"provider", "operation", "token_type"},
+	)
 )
 
 func init() {
-	Registry.MustRegister(modelCalls, modelCallDuration, modelAdmissionInFlight, modelAdmissionRejected, modelAdmissionWait, modelBreakerEvents)
+	Registry.MustRegister(modelCalls, modelCallDuration, modelAdmissionInFlight, modelAdmissionRejected, modelAdmissionWait, modelBreakerEvents, modelTokens)
 }
 
 func ObserveModelBreakerEvent(provider, event string) {
@@ -85,6 +92,19 @@ func ObserveModelCall(provider, operation, outcome string, seconds float64) {
 	modelCalls.WithLabelValues(provider, operation, outcome).Inc()
 	if seconds >= 0 {
 		modelCallDuration.WithLabelValues(provider, operation, outcome).Observe(seconds)
+	}
+}
+
+// ObserveModelTokens records provider-reported usage with only bounded labels.
+// Zero/negative values are ignored because some compatible providers omit
+// usage or return partial streaming metadata.
+func ObserveModelTokens(provider, operation string, prompt, completion, total int) {
+	provider = modelProviderClass(provider)
+	operation = modelOperation(operation)
+	for tokenType, value := range map[string]int{"prompt": prompt, "completion": completion, "total": total} {
+		if value > 0 {
+			modelTokens.WithLabelValues(provider, operation, tokenType).Add(float64(value))
+		}
 	}
 }
 

@@ -200,6 +200,10 @@ func (m *OpenAIEinoModel) Generate(ctx context.Context, input []*schema.Message,
 
 		msg, err := m.doGenerate(ctx, input, opts...)
 		if err == nil {
+			if msg != nil && msg.ResponseMeta != nil && msg.ResponseMeta.Usage != nil {
+				usage := msg.ResponseMeta.Usage
+				observability.ObserveModelTokens(m.provider, "generate", usage.PromptTokens, usage.CompletionTokens, usage.TotalTokens)
+			}
 			m.recordSuccess()
 			return msg, nil
 		}

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"wisesentinel-platform/internal/observability"
 	"wisesentinel-platform/internal/pkg/apperr"
 
 	"github.com/cloudwego/eino/components/model"
@@ -38,6 +39,42 @@ func TestGenerateUsesOneTotalTimeoutBudgetAcrossRetries(t *testing.T) {
 	if got := requests.Load(); got != 1 {
 		t.Fatalf("requests = %d, want 1 after parent deadline", got)
 	}
+}
+
+func TestGeneratePreservesUsageForTokenObservation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19}}`))
+	}))
+	defer server.Close()
+
+	m := NewOpenAIEinoModel("test", "test-model", "key", server.URL, time.Second)
+	msg, err := m.Generate(context.Background(), []*schema.Message{{Role: schema.User, Content: "hello"}})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if msg.ResponseMeta == nil || msg.ResponseMeta.Usage == nil || msg.ResponseMeta.Usage.TotalTokens != 19 {
+		t.Fatalf("usage not preserved: %#v", msg.ResponseMeta)
+	}
+	families, err := observability.Registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "ws_model_tokens_total" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			labels := map[string]string{}
+			for _, label := range metric.Label {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if labels["provider"] == "other" && labels["operation"] == "generate" && labels["token_type"] == "total" && metric.Counter.GetValue() >= 19 {
+				return
+			}
+		}
+	}
+	t.Fatal("model token usage metric not observed")
 }
 
 func TestModelCallOutcomeUsesStableCategories(t *testing.T) {
