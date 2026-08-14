@@ -28,6 +28,7 @@ METRICS = {
     "business_keyword_hit_rate": "higher",
     "citation_validity_rate": "higher",
     "citation_version_rate": "higher",
+    "citation_grounding_rate": "higher",
     "latency_ms.p50": "lower",
     "latency_ms.p95": "lower",
     "rag_ranking.recall_at_1": "higher",

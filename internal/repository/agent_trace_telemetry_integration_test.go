@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -35,7 +36,7 @@ func TestAgentTracePersistenceSuppressesTelemetryBodiesIntegration(t *testing.T)
 	if err := repo.Start(ctx, &AgentTrace{TraceID: traceID, TenantID: tenantID, UserID: "tester", AgentType: "chat", Query: `{"content":"` + canary + `"}`, StartedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.AddStep(ctx, &AgentTraceStep{TraceID: traceID, TenantID: tenantID, AgentType: "chat", StepType: "rag", StepName: "retrieve", InputSummary: canary, OutputSummary: `{"document":"` + canary + `"}`, ErrorMsg: canary}); err != nil {
+	if err := repo.AddStep(ctx, &AgentTraceStep{TraceID: traceID, TenantID: tenantID, AgentType: "chat", StepType: "rag", StepName: "retrieve", InputSummary: canary, OutputSummary: `{"document":"` + canary + `"}`, EvidenceDocIDs: []string{"doc-a", "doc-a", "doc-b"}, ErrorMsg: canary}); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Finish(ctx, traceID, "failed", canary, 1); err != nil {
@@ -49,17 +50,26 @@ func TestAgentTracePersistenceSuppressesTelemetryBodiesIntegration(t *testing.T)
 		t.Fatal(err)
 	}
 	var steps []struct {
-		Input  string `json:"input_summary"`
-		Output string `json:"output_summary"`
-		Error  string `json:"error_msg"`
+		Input    string `json:"input_summary"`
+		Output   string `json:"output_summary"`
+		Evidence string `json:"evidence_doc_ids"`
+		Error    string `json:"error_msg"`
 	}
-	if err := g.DB().Ctx(ctx).Model("ws_agent_trace_step").Where("tenant_id", tenantID).Fields("input_summary,output_summary,error_msg").Scan(&steps); err != nil {
+	if err := g.DB().Ctx(ctx).Model("ws_agent_trace_step").Where("tenant_id", tenantID).Fields("input_summary,output_summary,evidence_doc_ids,error_msg").Scan(&steps); err != nil {
 		t.Fatal(err)
 	}
 	for _, value := range append([]string{values[0].QueryText, values[0].ErrorMsg}, steps[0].Input, steps[0].Output, steps[0].Error) {
 		if strings.Contains(value, canary) || !strings.Contains(value, `"suppressed":true`) {
 			t.Fatalf("unsafe trace telemetry value: %q", value)
 		}
+	}
+	var evidence []string
+	if err := json.Unmarshal([]byte(steps[0].Evidence), &evidence); err != nil || len(evidence) != 2 || evidence[0] != "doc-a" || evidence[1] != "doc-b" {
+		t.Fatalf("evidence doc IDs = %q, parsed=%#v, err=%v", steps[0].Evidence, evidence, err)
+	}
+	loaded, err := repo.ListSteps(ctx, tenantID, traceID)
+	if err != nil || len(loaded) != 1 || len(loaded[0].EvidenceDocIDs) != 2 {
+		t.Fatalf("loaded evidence = %#v, err=%v", loaded, err)
 	}
 }
 

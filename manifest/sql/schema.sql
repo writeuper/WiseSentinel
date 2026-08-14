@@ -257,6 +257,7 @@ CREATE TABLE IF NOT EXISTS ws_agent_trace_step (
     step_name      VARCHAR(128) NOT NULL DEFAULT '',
     input_summary  TEXT,
     output_summary TEXT,
+    evidence_doc_ids JSON COMMENT 'bounded authorized document IDs for Citation grounding',
     status         VARCHAR(32)  NOT NULL DEFAULT 'success',
     latency_ms     BIGINT       NOT NULL DEFAULT 0,
     error_msg      TEXT,

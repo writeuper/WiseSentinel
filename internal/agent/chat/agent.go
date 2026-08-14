@@ -270,7 +270,7 @@ func (a *Agent) Invoke(ctx context.Context, req *domain.ChatAgentRequest) (*doma
 	// 1. Retrieve RAG documents and collect citations when enabled
 	ragStart := time.Now()
 	documents, citations, ragStatus, ragErr := a.retrieveDocs(ctx, req)
-	a.recordStep(ctx, traceID, req, "rag", "retrieve", req.Query, documents, ragStatus, time.Since(ragStart).Milliseconds(), ragErr)
+	a.recordStep(ctx, traceID, req, "rag", "retrieve", req.Query, documents, ragStatus, time.Since(ragStart).Milliseconds(), ragErr, citationDocIDs(citations))
 
 	// 2. Build the ReAct agent
 	reactAgent, err := a.buildReActAgent(ctx, req, documents, traceID)
@@ -415,7 +415,7 @@ func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domai
 		// client can show the evidence boundary even if generation later fails.
 		ragStart := time.Now()
 		documents, citations, ragStatus, ragErr := a.retrieveDocs(ctx, req)
-		a.recordStep(ctx, traceID, req, "rag", "retrieve", req.Query, documents, ragStatus, time.Since(ragStart).Milliseconds(), ragErr)
+		a.recordStep(ctx, traceID, req, "rag", "retrieve", req.Query, documents, ragStatus, time.Since(ragStart).Milliseconds(), ragErr, citationDocIDs(citations))
 		for _, citation := range citations {
 			payload, marshalErr := json.Marshal(citation)
 			if marshalErr != nil {
@@ -810,7 +810,7 @@ func (a *Agent) finishTrace(ctx context.Context, traceID, status, errMsg string,
 	_ = a.traceRepo.Finish(persistCtx, traceID, status, errMsg, latencyMS)
 }
 
-func (a *Agent) recordStep(ctx context.Context, traceID string, req *domain.ChatAgentRequest, stepType, stepName, input, output, status string, latencyMS int64, errMsg string) {
+func (a *Agent) recordStep(ctx context.Context, traceID string, req *domain.ChatAgentRequest, stepType, stepName, input, output, status string, latencyMS int64, errMsg string, evidence ...[]string) {
 	if a.traceRepo == nil || traceID == "" {
 		return
 	}
@@ -818,7 +818,7 @@ func (a *Agent) recordStep(ctx context.Context, traceID string, req *domain.Chat
 	if tenantID == "" {
 		tenantID = ctxkeys.TenantIDFrom(ctx)
 	}
-	_ = a.traceRepo.AddStep(ctx, &repository.AgentTraceStep{
+	step := &repository.AgentTraceStep{
 		TraceID:       traceID,
 		TenantID:      tenantID,
 		AgentType:     string(domain.AgentTypeChat),
@@ -829,7 +829,21 @@ func (a *Agent) recordStep(ctx context.Context, traceID string, req *domain.Chat
 		Status:        status,
 		LatencyMS:     latencyMS,
 		ErrorMsg:      truncate(errMsg, 1000),
-	})
+	}
+	if len(evidence) > 0 {
+		step.EvidenceDocIDs = evidence[0]
+	}
+	_ = a.traceRepo.AddStep(ctx, step)
+}
+
+func citationDocIDs(citations []domain.Citation) []string {
+	ids := make([]string, 0, len(citations))
+	for _, citation := range citations {
+		if citation.DocID != "" {
+			ids = append(ids, citation.DocID)
+		}
+	}
+	return ids
 }
 
 func extractToolCallSummary(msg *schema.Message) []domain.ToolCallSummary {

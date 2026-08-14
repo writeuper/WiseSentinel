@@ -19,6 +19,7 @@ def summary(**overrides):
         "business_pass_rate": 0.75,
         "business_pass_ci95": [0.58, 0.86],
         "route_accuracy": 0.9,
+        "citation_grounding_rate": None,
         "latency_ms": {"p50": 100, "p95": 500},
         "rag_ranking": {"sample_count": 0},
         "rag_ranking_verified": {"sample_count": 0},
@@ -67,6 +68,15 @@ class CompareAgentEvalTests(unittest.TestCase):
         result = MODULE.compare_summaries(before, after)
         self.assertNotIn("overall_pass_rate", result["deltas"])
         self.assertNotIn("latency_ms.p95", result["deltas"])
+
+    def test_citation_grounding_delta_is_compared_only_when_both_runs_are_verifiable(self):
+        before = summary(citation_grounding_rate=0.5)
+        after = summary(citation_grounding_rate=0.75)
+        result = MODULE.compare_summaries(before, after)
+        self.assertTrue(result["deltas"]["citation_grounding_rate"]["improved"])
+
+        unverifiable = MODULE.compare_summaries(before, summary(citation_grounding_rate=None))
+        self.assertNotIn("citation_grounding_rate", unverifiable["deltas"])
 
     def test_cli_writes_json_and_returns_nonzero_for_incomparable_runs(self):
         with tempfile.TemporaryDirectory() as directory:

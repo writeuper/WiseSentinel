@@ -1400,15 +1400,16 @@ func toAgentTraceSteps(in []repository.AgentTraceStep) []v1.AgentTraceStep {
 			createdAt = s.CreatedAt.UTC().Format(time.RFC3339)
 		}
 		out = append(out, v1.AgentTraceStep{
-			ID:            s.ID,
-			StepType:      s.StepType,
-			StepName:      s.StepName,
-			InputSummary:  redact.Summary(s.InputSummary, 2000),
-			OutputSummary: redact.Summary(s.OutputSummary, 4000),
-			Status:        s.Status,
-			LatencyMS:     s.LatencyMS,
-			ErrorMsg:      redact.Summary(s.ErrorMsg, 2000),
-			CreatedAt:     createdAt,
+			ID:             s.ID,
+			StepType:       s.StepType,
+			StepName:       s.StepName,
+			InputSummary:   redact.Summary(s.InputSummary, 2000),
+			OutputSummary:  redact.Summary(s.OutputSummary, 4000),
+			EvidenceDocIDs: append([]string(nil), s.EvidenceDocIDs...),
+			Status:         s.Status,
+			LatencyMS:      s.LatencyMS,
+			ErrorMsg:       redact.Summary(s.ErrorMsg, 2000),
+			CreatedAt:      createdAt,
 		})
 	}
 	return out

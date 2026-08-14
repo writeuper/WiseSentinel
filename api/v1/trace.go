@@ -30,13 +30,14 @@ type AgentTrace struct {
 }
 
 type AgentTraceStep struct {
-	ID            int64  `json:"id"`
-	StepType      string `json:"step_type"`
-	StepName      string `json:"step_name"`
-	InputSummary  string `json:"input_summary,omitempty"`
-	OutputSummary string `json:"output_summary,omitempty"`
-	Status        string `json:"status"`
-	LatencyMS     int64  `json:"latency_ms"`
-	ErrorMsg      string `json:"error_msg,omitempty"`
-	CreatedAt     string `json:"created_at,omitempty"`
+	ID             int64    `json:"id"`
+	StepType       string   `json:"step_type"`
+	StepName       string   `json:"step_name"`
+	InputSummary   string   `json:"input_summary,omitempty"`
+	OutputSummary  string   `json:"output_summary,omitempty"`
+	EvidenceDocIDs []string `json:"evidence_doc_ids,omitempty"`
+	Status         string   `json:"status"`
+	LatencyMS      int64    `json:"latency_ms"`
+	ErrorMsg       string   `json:"error_msg,omitempty"`
+	CreatedAt      string   `json:"created_at,omitempty"`
 }

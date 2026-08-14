@@ -261,13 +261,16 @@ def extract_trace_evidence_doc_ids(trace: Dict[str, Any]) -> set[str]:
     for step in trace.get("steps") or []:
         if not isinstance(step, dict):
             continue
-        for field in ("output_summary", "output", "evidence", "detail"):
+        for field in ("evidence_doc_ids", "output_summary", "output", "evidence", "detail"):
             value = step.get(field)
             values = value if isinstance(value, list) else [value]
             for item in values:
                 if isinstance(item, dict):
                     collect(item)
                 elif isinstance(item, str):
+                    if field == "evidence_doc_ids" and item.strip():
+                        evidence_ids.add(item.strip())
+                        continue
                     # Structured JSON summaries are common in persisted traces.
                     try:
                         decoded = json.loads(item)
