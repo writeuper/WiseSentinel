@@ -271,17 +271,19 @@ export default function OpsPage() {
           <Typography.Title level={5}>分析任务</Typography.Title>
           <Input.TextArea
             rows={5}
+            aria-label="Ops 告警分析提示词"
             placeholder="可选：自定义 Ops Prompt，留空使用默认"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             style={{ marginBottom: 16 }}
           />
           <div style={{ marginBottom: 16 }}>
-            <Switch checked={asyncMode} onChange={setAsyncMode} />{' '}
+            <Switch aria-label="异步模式" checked={asyncMode} onChange={setAsyncMode} />{' '}
             <span style={{ marginLeft: 8 }}>异步模式</span>
           </div>
           <Typography.Text type="secondary">Max Iterations</Typography.Text>
           <Slider
+            aria-label="最大 Agent 执行步数"
             value={maxIter}
             min={5}
             max={30}
@@ -291,6 +293,7 @@ export default function OpsPage() {
           <Button
             type="primary"
             icon={<PlayCircleOutlined />}
+            aria-label="开始告警分析"
             block
             loading={submitting}
             onClick={handleStart}
@@ -307,6 +310,7 @@ export default function OpsPage() {
               <Space>
                 <Select
                   allowClear
+                  aria-label="按任务状态筛选"
                   placeholder="全部状态"
                   style={{ width: 160 }}
                   value={statusFilter}
@@ -319,7 +323,7 @@ export default function OpsPage() {
                     { value: 'awaiting_approval', label: 'awaiting_approval' },
                   ]}
                 />
-                <Button icon={<ReloadOutlined />} onClick={loadTasks} loading={loadingList}>
+                <Button aria-label="刷新 Ops 任务列表" icon={<ReloadOutlined />} onClick={loadTasks} loading={loadingList}>
                   刷新
                 </Button>
               </Space>

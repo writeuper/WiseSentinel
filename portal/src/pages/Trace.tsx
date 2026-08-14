@@ -122,7 +122,7 @@ export default function TracePage() {
             extra={<Link to="/chat"><Button type="primary">返回对话</Button></Link>}
           />
         )}
-        {!loading && error && <Alert type="error" showIcon message={error} action={<Button size="small" onClick={() => window.location.reload()}>重试</Button>} />}
+        {!loading && error && <Alert type="error" showIcon message={error} action={<Button aria-label="重新加载 Trace" size="small" onClick={() => window.location.reload()}>重试</Button>} />}
         {!loading && data && (
           <>
             <Card title="执行概览" style={{ marginBottom: 16 }}>

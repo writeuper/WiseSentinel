@@ -378,6 +378,7 @@ export default function ChatPage() {
                   <Button
                     key={p}
                     shape="round"
+                    aria-label={`使用示例问题：${p}`}
                     onClick={() => {
                       setInput(p);
                       inputRef.current?.focus();
@@ -473,6 +474,7 @@ export default function ChatPage() {
                 <Button
                   size="small"
                   type="link"
+                  aria-label="重试发送上一条消息"
                   onClick={() => handleSend(retryRequest)}
                   disabled={sending || streaming}
                   style={{ marginLeft: 8 }}
@@ -499,6 +501,7 @@ export default function ChatPage() {
         >
           <Input.TextArea
             ref={inputRef as any}
+            aria-label="Agent 问题输入"
             placeholder="输入问题，Enter 发送…"
             autoSize={{ minRows: 2, maxRows: 6 }}
             value={input}
@@ -517,22 +520,23 @@ export default function ChatPage() {
             }}
           >
             <div style={{ display: 'flex', gap: 16, fontSize: 12, color: '#64748b', alignItems: 'center' }}>
-              <Checkbox checked={enableRag} onChange={(e) => setEnableRag(e.target.checked)}>
+              <Checkbox aria-label="启用 RAG 知识库" checked={enableRag} onChange={(e) => setEnableRag(e.target.checked)}>
                 RAG 知识库
               </Checkbox>
-              <Checkbox checked={enableTools} onChange={(e) => setEnableTools(e.target.checked)}>
+              <Checkbox aria-label="启用工具调用" checked={enableTools} onChange={(e) => setEnableTools(e.target.checked)}>
                 工具调用
               </Checkbox>
-              <Checkbox checked={useStream} onChange={(e) => setUseStream(e.target.checked)}>
+              <Checkbox aria-label="启用流式响应" checked={useStream} onChange={(e) => setUseStream(e.target.checked)}>
                 流式
               </Checkbox>
-              <Button size="small" type="link" onClick={handleNewChat}>
+              <Button size="small" type="link" aria-label="创建新对话" onClick={handleNewChat}>
                 新对话
               </Button>
             </div>
             <Button
               type="primary"
               icon={<SendOutlined />}
+              aria-label={streaming ? '生成中' : sending ? '发送中' : '发送问题'}
               onClick={() => handleSend()}
               loading={sending || streaming}
               disabled={!input.trim()}

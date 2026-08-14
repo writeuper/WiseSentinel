@@ -100,6 +100,7 @@ export default function ApprovalsPage() {
                 type="primary"
                 size="small"
                 icon={<CheckOutlined />}
+                aria-label={`批准审批 ${row.approval_id}`}
                 onClick={() => {
                   setDecisionTarget(row);
                   setDecisionKind('approved');
@@ -111,6 +112,7 @@ export default function ApprovalsPage() {
                 danger
                 size="small"
                 icon={<CloseOutlined />}
+                aria-label={`拒绝审批 ${row.approval_id}`}
                 onClick={() => {
                   setDecisionTarget(row);
                   setDecisionKind('rejected');
@@ -133,7 +135,7 @@ export default function ApprovalsPage() {
         title="审批中心"
         tags={[`${total} 待处理`]}
         extra={
-          <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>
+          <Button aria-label="刷新审批列表" icon={<ReloadOutlined />} onClick={load} loading={loading}>
             刷新
           </Button>
         }
@@ -182,7 +184,7 @@ export default function ApprovalsPage() {
         </Typography.Paragraph>
         <Form form={form} layout="vertical">
           <Form.Item label="审批意见（可选）" name="comment">
-            <Input.TextArea rows={4} placeholder="可附上说明，便于事后审计" maxLength={500} showCount />
+            <Input.TextArea aria-label="审批意见" rows={4} placeholder="可附上说明，便于事后审计" maxLength={500} showCount />
           </Form.Item>
         </Form>
       </Modal>
