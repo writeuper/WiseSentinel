@@ -281,6 +281,25 @@ ws_model_tokens_total{operation="generate",provider="secret",token_type="unknown
         self.assertEqual(report["business_terminal"]["samples"], 3)
         self.assertEqual(report["all_finished"]["samples"], 4)
 
+    def test_aggregate_trace_by_agent_separates_business_rates_and_long_tail(self):
+        report = MODULE.aggregate_trace_by_agent([
+            ["chat", "success", "100"], ["chat", "failed", "900"],
+            ["chat", "abandoned", "5000"], ["ops", "completed", "200"],
+            ["ops", "timeout", "1200"],
+        ])
+        self.assertEqual([item["agent_type"] for item in report], ["chat", "ops"])
+        chat = report[0]
+        self.assertEqual(chat["business_terminal_samples"], 2)
+        self.assertEqual(chat["completion_rate"], 50.0)
+        self.assertEqual(chat["failure_rate"], 50.0)
+        self.assertEqual(chat["abandoned_count"], 1)
+        self.assertEqual(chat["latency"]["business_terminal"]["p95_ms"], 900.0)
+
+    def test_aggregate_trace_by_agent_returns_na_for_abandoned_only_cohort(self):
+        report = MODULE.aggregate_trace_by_agent([["chat", "abandoned", "100"]])
+        self.assertIsNone(report[0]["completion_rate"])
+        self.assertIsNone(report[0]["latency"]["business_terminal"]["p95_ms"])
+
     def test_tool_latency_reports_zero_sample_quality_signal(self):
         report = MODULE.aggregate_tool_latency([["fast", "success", "0"], ["fast", "error", "2"]])
         self.assertEqual(report["by_tool"][0]["zero_latency_samples"], 1)

@@ -323,6 +323,42 @@ def aggregate_trace_latency(rows: list[list[str]]) -> dict[str, Any]:
     return {"success": summary(success), "business_terminal": summary(business), "all_finished": summary(all_values)}
 
 
+def aggregate_trace_by_agent(rows: list[list[str]]) -> list[dict[str, Any]]:
+    """Aggregate completion and latency by Agent type without identifiers.
+
+    Business rates exclude ``abandoned`` recovery terminals from the
+    denominator. Unknown terminal statuses remain visible as failures so a
+    newly introduced status cannot silently improve the rate.
+    """
+    grouped: dict[str, list[list[str]]] = defaultdict(list)
+    for row in rows:
+        if len(row) < 3:
+            continue
+        agent = str(row[0] or "unknown").strip() or "unknown"
+        grouped[agent].append([row[1], row[2]])
+    result: list[dict[str, Any]] = []
+    for agent in sorted(grouped):
+        samples = grouped[agent]
+        statuses = [str(row[0] or "unknown") for row in samples]
+        success = sum(status in {"success", "completed"} for status in statuses)
+        abandoned = sum(status == "abandoned" for status in statuses)
+        failed = len(statuses) - success - abandoned
+        business_total = success + failed
+        latency = aggregate_trace_latency(samples)
+        result.append({
+            "agent_type": agent,
+            "traces": len(samples),
+            "success_count": success,
+            "failure_count": failed,
+            "abandoned_count": abandoned,
+            "business_terminal_samples": business_total,
+            "completion_rate": round(success / business_total * 100, 2) if business_total else None,
+            "failure_rate": round(failed / business_total * 100, 2) if business_total else None,
+            "latency": latency,
+        })
+    return result
+
+
 def parse_prometheus(text: str) -> dict[str, Any]:
     """Calculate success/error-aware P95 from cumulative histogram samples.
 
@@ -818,6 +854,11 @@ def aggregate(traffic_attestation_path: str | None = None, pricing_profile_path:
       FROM ws_agent_trace
       WHERE finished_at IS NOT NULL AND latency_ms >= 0
     """)
+    trace_agent_rows = mysql_query("""
+      SELECT agent_type, status, latency_ms
+      FROM ws_agent_trace
+      WHERE finished_at IS NOT NULL AND latency_ms >= 0
+    """)
     by_agent = mysql_query("""
       SELECT agent_type, COUNT(*), COALESCE(AVG(step_count),0)
       FROM (SELECT t.agent_type, t.trace_id, COUNT(s.id) step_count
@@ -899,6 +940,7 @@ def aggregate(traffic_attestation_path: str | None = None, pricing_profile_path:
         "steps": {"finished_traces": safe_int(steps[0]), "traces_with_steps": safe_int(steps[1]), "avg_per_trace": round(safe_float(steps[2]), 3),
                    "min": safe_int(steps[3]), "max": safe_int(steps[4])},
         "trace_latency": aggregate_trace_latency(trace_latency_rows),
+        "agent_outcome_latency": aggregate_trace_by_agent(trace_agent_rows),
         "by_agent_type": [{"agent_type": row[0], "traces": safe_int(row[1]), "avg_steps": round(safe_float(row[2]), 3)} for row in by_agent],
         "latency_by_agent_type": [{"agent_type": row[0], "traces": safe_int(row[1]),
                                     "avg_latency_ms_success": round(safe_float(row[2]), 2),
@@ -957,6 +999,9 @@ def main() -> int:
         for label, key in (("success", "success"), ("business terminal", "business_terminal"), ("all finished", "all_finished")):
             latency = report["trace_latency"][key]
             print(f"- Agent latency {label}: samples={latency['samples']}, p50={latency['p50_ms'] if latency['p50_ms'] is not None else 'N/A'} ms, p95={latency['p95_ms'] if latency['p95_ms'] is not None else 'N/A'} ms, p99={latency['p99_ms'] if latency['p99_ms'] is not None else 'N/A'} ms")
+        for agent in report["agent_outcome_latency"]:
+            business = agent["latency"]["business_terminal"]
+            print(f"- Agent cohort {agent['agent_type']}: completion={agent['completion_rate'] if agent['completion_rate'] is not None else 'N/A'}%, failure={agent['failure_rate'] if agent['failure_rate'] is not None else 'N/A'}%, samples={agent['business_terminal_samples']}, p95={business['p95_ms'] if business['p95_ms'] is not None else 'N/A'} ms, p99={business['p99_ms'] if business['p99_ms'] is not None else 'N/A'} ms")
         print(f"- Average Agent steps/trace: {report['steps']['avg_per_trace']}")
         print(f"- Tool success rate: {report['tool_calls']['success_rate'] if report['tool_calls']['success_rate'] is not None else 'N/A'}%")
         index_tasks = report["index_tasks"]
