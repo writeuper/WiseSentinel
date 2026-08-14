@@ -22,6 +22,7 @@ type OpsTask struct {
 	DetailJSON     string
 	Status         string
 	TraceID        string
+	ConfigVersion  string
 	CreatedBy      string
 	StartedAt      *time.Time
 	FinishedAt     *time.Time
@@ -43,14 +44,15 @@ func NewOpsTaskRepo() *OpsTaskRepo {
 
 func (r *OpsTaskRepo) Create(ctx context.Context, task *OpsTask) error {
 	_, err := g.DB().Insert(ctx, "ws_ops_task", g.Map{
-		"tenant_id":    task.TenantID,
-		"task_id":      task.TaskID,
-		"trigger_type": task.TriggerType,
-		"input_query":  task.InputQuery,
-		"status":       task.Status,
-		"trace_id":     task.TraceID,
-		"created_by":   task.CreatedBy,
-		"max_retry":    task.MaxRetry,
+		"tenant_id":      task.TenantID,
+		"task_id":        task.TaskID,
+		"trigger_type":   task.TriggerType,
+		"input_query":    task.InputQuery,
+		"status":         task.Status,
+		"trace_id":       task.TraceID,
+		"config_version": task.ConfigVersion,
+		"created_by":     task.CreatedBy,
+		"max_retry":      task.MaxRetry,
 	})
 	return err
 }
@@ -65,6 +67,7 @@ func (r *OpsTaskRepo) Get(ctx context.Context, tenantID, taskID string) (*OpsTas
 		DetailJSON     string     `json:"detail_json"`
 		Status         string     `json:"status"`
 		TraceID        string     `json:"trace_id"`
+		ConfigVersion  string     `json:"config_version"`
 		CreatedBy      string     `json:"created_by"`
 		StartedAt      *time.Time `json:"started_at"`
 		FinishedAt     *time.Time `json:"finished_at"`
@@ -98,6 +101,7 @@ func (r *OpsTaskRepo) Get(ctx context.Context, tenantID, taskID string) (*OpsTas
 		DetailJSON:     row.DetailJSON,
 		Status:         row.Status,
 		TraceID:        row.TraceID,
+		ConfigVersion:  row.ConfigVersion,
 		CreatedBy:      row.CreatedBy,
 		StartedAt:      row.StartedAt,
 		FinishedAt:     row.FinishedAt,

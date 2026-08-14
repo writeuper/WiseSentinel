@@ -42,10 +42,18 @@ const (
 
 // Agent implements domain.ChatAgent using Eino's ReAct agent.
 type Agent struct {
-	modelRouter domain.ModelRouter
-	ragService  domain.RAGService
-	toolGateway domain.ToolGateway
-	traceRepo   *repository.AgentTraceRepo
+	modelRouter    domain.ModelRouter
+	ragService     domain.RAGService
+	toolGateway    domain.ToolGateway
+	traceRepo      *repository.AgentTraceRepo
+	configProvider domain.AgentConfigProvider
+}
+
+// SetConfigProvider wires the tenant-scoped runtime configuration source.
+// Keeping this setter optional preserves deterministic unit-test construction
+// and uses built-in safe defaults when no database is available.
+func (a *Agent) SetConfigProvider(provider domain.AgentConfigProvider) {
+	a.configProvider = provider
 }
 
 // NewAgent creates a chat agent.
@@ -225,6 +233,9 @@ func (a *Agent) Invoke(ctx context.Context, req *domain.ChatAgentRequest) (*doma
 	if req == nil {
 		return nil, apperr.ErrBadRequest
 	}
+	if err := a.loadRuntimeConfig(ctx, req); err != nil {
+		return nil, apperr.Wrap(err, apperr.ErrAgentFailed)
+	}
 	ctx = ctxkeys.WithRequestQuery(ctx, req.Query)
 	traceID := ctxkeys.TraceIDFrom(ctx)
 	if traceID == "" {
@@ -321,6 +332,9 @@ func isModelOverloadedError(err error) bool {
 func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domain.StreamReader, error) {
 	if req == nil {
 		return nil, apperr.ErrBadRequest
+	}
+	if err := a.loadRuntimeConfig(ctx, req); err != nil {
+		return nil, apperr.Wrap(err, apperr.ErrAgentFailed)
 	}
 	traceID := ctxkeys.TraceIDFrom(ctx)
 	if traceID == "" {
@@ -597,7 +611,11 @@ func (a *Agent) buildReActAgent(ctx context.Context, req *domain.ChatAgentReques
 	}
 
 	// 3. Build system prompt using ChatTemplate
-	chatTemplate := NewChatTemplate(documents)
+	customPrompt := ""
+	if req.RuntimeConfig != nil {
+		customPrompt = req.RuntimeConfig.SystemPrompt
+	}
+	chatTemplate := NewChatTemplate(documents, customPrompt)
 
 	// 4. Create ReAct agent config with the extracted MessageModifier
 	config := &react.AgentConfig{
@@ -606,7 +624,7 @@ func (a *Agent) buildReActAgent(ctx context.Context, req *domain.ChatAgentReques
 			Tools: einoTools,
 		},
 		MessageModifier: chatTemplate.MessageModifier(),
-		MaxStep:         maxStep,
+		MaxStep:         runtimeMaxSteps(req.RuntimeConfig, maxStep),
 		GraphName:       "ChatAgent",
 	}
 
@@ -787,14 +805,48 @@ func (a *Agent) startTrace(ctx context.Context, traceID string, req *domain.Chat
 		userID = ctxkeys.UserIDFrom(ctx)
 	}
 	_ = a.traceRepo.Start(ctx, &repository.AgentTrace{
-		TraceID:   traceID,
-		TenantID:  tenantID,
-		UserID:    userID,
-		AgentType: string(domain.AgentTypeChat),
-		SessionID: req.SessionID,
-		Query:     req.Query,
-		StartedAt: startedAt,
+		TraceID:       traceID,
+		TenantID:      tenantID,
+		UserID:        userID,
+		AgentType:     string(domain.AgentTypeChat),
+		ConfigVersion: runtimeConfigVersion(req.RuntimeConfig),
+		SessionID:     req.SessionID,
+		Query:         req.Query,
+		StartedAt:     startedAt,
 	})
+}
+
+func (a *Agent) loadRuntimeConfig(ctx context.Context, req *domain.ChatAgentRequest) error {
+	if a.configProvider == nil || req == nil {
+		return nil
+	}
+	tenantID := req.TenantID
+	if tenantID == "" {
+		tenantID = ctxkeys.TenantIDFrom(ctx)
+	}
+	config, err := a.configProvider.GetActiveAgentConfig(ctx, tenantID, domain.AgentTypeChat)
+	if err != nil {
+		return err
+	}
+	req.RuntimeConfig = config
+	return nil
+}
+
+func runtimeConfigVersion(config *domain.AgentRuntimeConfig) string {
+	if config == nil {
+		return ""
+	}
+	return config.Version
+}
+
+func runtimeMaxSteps(config *domain.AgentRuntimeConfig, fallback int) int {
+	if config == nil || config.MaxIterations <= 0 {
+		return fallback
+	}
+	if config.MaxIterations > fallback {
+		return fallback
+	}
+	return config.MaxIterations
 }
 
 func (a *Agent) finishTrace(ctx context.Context, traceID, status, errMsg string, latencyMS int64) {

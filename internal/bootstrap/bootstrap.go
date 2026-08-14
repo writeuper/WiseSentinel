@@ -165,6 +165,7 @@ func Init(ctx context.Context) (*App, error) {
 		g.Log().Infof(ctx, "reaped stale Agent Traces: %d", reaped)
 	}
 	faultKnowledgeRepo := repository.NewFaultKnowledgeRepo()
+	agentConfigRepo := repository.NewAgentConfigRepo()
 	toolCallRecordRepo := repository.NewToolCallRecordRepo()
 	feedbackRepo := repository.NewFeedbackRepo()
 	toolGateway.SetToolCallRecordRepo(toolCallRecordRepo)
@@ -216,9 +217,11 @@ func Init(ctx context.Context) (*App, error) {
 
 	// Chat Agent
 	chatAgent := chatagent.NewAgent(modelRouter, ragService, toolGateway, traceRepo)
+	chatAgent.SetConfigProvider(agentConfigRepo)
 
 	// Ops Agent (M4 — full Plan-Execute-Replan)
 	opsAgent := opsagent.NewAgent(modelRouter, toolGateway, opsTaskRepo, faultKnowledgeRepo, traceRepo)
+	opsAgent.SetConfigProvider(agentConfigRepo)
 
 	// Async workers (DB polling with distributed locks)
 	// Build a standalone *redis.Client from the same REDIS_ADDRESS env

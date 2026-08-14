@@ -15,18 +15,19 @@ type GetTraceRes struct {
 }
 
 type AgentTrace struct {
-	TraceID    string `json:"trace_id"`
-	TenantID   string `json:"tenant_id"`
-	UserID     string `json:"user_id"`
-	AgentType  string `json:"agent_type"`
-	SessionID  string `json:"session_id,omitempty"`
-	TaskID     string `json:"task_id,omitempty"`
-	Query      string `json:"query"`
-	Status     string `json:"status"`
-	LatencyMS  int64  `json:"latency_ms"`
-	ErrorMsg   string `json:"error_msg,omitempty"`
-	StartedAt  string `json:"started_at,omitempty"`
-	FinishedAt string `json:"finished_at,omitempty"`
+	TraceID       string `json:"trace_id"`
+	TenantID      string `json:"tenant_id"`
+	UserID        string `json:"user_id"`
+	AgentType     string `json:"agent_type"`
+	ConfigVersion string `json:"config_version,omitempty"`
+	SessionID     string `json:"session_id,omitempty"`
+	TaskID        string `json:"task_id,omitempty"`
+	Query         string `json:"query"`
+	Status        string `json:"status"`
+	LatencyMS     int64  `json:"latency_ms"`
+	ErrorMsg      string `json:"error_msg,omitempty"`
+	StartedAt     string `json:"started_at,omitempty"`
+	FinishedAt    string `json:"finished_at,omitempty"`
 }
 
 type AgentTraceStep struct {

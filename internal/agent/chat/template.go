@@ -12,15 +12,21 @@ import (
 // for the Eino ReAct agent. It replaces the inline sync.Once closure
 // in buildReActAgent, making the prompt construction testable.
 type ChatTemplate struct {
-	documents string
-	once      sync.Once
-	systemMsg *schema.Message
+	documents    string
+	customPrompt string
+	once         sync.Once
+	systemMsg    *schema.Message
 }
 
 // NewChatTemplate creates a ChatTemplate with the given documents.
-func NewChatTemplate(documents string) *ChatTemplate {
+func NewChatTemplate(documents string, customPrompt ...string) *ChatTemplate {
+	base := ""
+	if len(customPrompt) > 0 {
+		base = customPrompt[0]
+	}
 	return &ChatTemplate{
-		documents: documents,
+		documents:    documents,
+		customPrompt: base,
 	}
 }
 
@@ -28,16 +34,23 @@ func NewChatTemplate(documents string) *ChatTemplate {
 // This is public so it can be verified in unit tests.
 func (t *ChatTemplate) BuildSystemPrompt() string {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
-	return buildSystemPrompt(now, t.documents)
+	return buildSystemPromptWithBase(t.customPrompt, now, t.documents)
 }
 
 // BuildSystemPromptStatic is a test-friendly variant that accepts a fixed time.
 func (t *ChatTemplate) BuildSystemPromptStatic(now string) string {
-	return buildSystemPrompt(now, t.documents)
+	return buildSystemPromptWithBase(t.customPrompt, now, t.documents)
 }
 
 func buildSystemPrompt(now, documents string) string {
-	return "你是智哨(WiseSentinel)智能运维助手，负责处理运维相关的问题。\n\n" +
+	return buildSystemPromptWithBase("你是智哨(WiseSentinel)智能运维助手，负责处理运维相关的问题。", now, documents)
+}
+
+func buildSystemPromptWithBase(base, now, documents string) string {
+	if base == "" {
+		base = "你是智哨(WiseSentinel)智能运维助手，负责处理运维相关的问题。"
+	}
+	return base + "\n\n" +
 		"回答规则：\n" +
 		"- 回答必须基于提供的文档与工具返回结果，不得编造信息\n" +
 		"- 用户提到知识库、内部手册、内部文档或要求根据文档回答时，必须先调用 query_internal_docs；没有相关检索结果时明确说明未找到，不得把无关文档当作依据\n" +

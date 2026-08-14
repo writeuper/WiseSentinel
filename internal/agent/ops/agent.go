@@ -29,12 +29,37 @@ import (
 // prebuilt planexecute package and runs the resulting ADK agent against
 // the configured models and tools.
 type Agent struct {
-	modelRouter   domain.ModelRouter
-	toolGateway   domain.ToolGateway
-	taskRepo      *repository.OpsTaskRepo
-	traceRepo     *repository.AgentTraceRepo
-	knowledgeRepo *repository.FaultKnowledgeRepo
-	maxIter       int
+	modelRouter    domain.ModelRouter
+	toolGateway    domain.ToolGateway
+	taskRepo       *repository.OpsTaskRepo
+	traceRepo      *repository.AgentTraceRepo
+	knowledgeRepo  *repository.FaultKnowledgeRepo
+	configProvider domain.AgentConfigProvider
+	maxIter        int
+}
+
+// SetConfigProvider wires the tenant-scoped runtime configuration source.
+func (a *Agent) SetConfigProvider(provider domain.AgentConfigProvider) {
+	a.configProvider = provider
+}
+
+func (a *Agent) loadRuntimeConfig(ctx context.Context, tenantID string, req *domain.OpsAgentRequest) error {
+	if a.configProvider == nil || req == nil || tenantID == "" {
+		return nil
+	}
+	config, err := a.configProvider.GetActiveAgentConfig(ctx, tenantID, domain.AgentTypeOps)
+	if err != nil {
+		return err
+	}
+	req.RuntimeConfig = config
+	return nil
+}
+
+func runtimeConfigVersion(config *domain.AgentRuntimeConfig) string {
+	if config == nil {
+		return ""
+	}
+	return config.Version
 }
 
 // NewAgent creates a new Ops Agent.
@@ -82,6 +107,9 @@ func (a *Agent) Analyze(ctx context.Context, req *domain.OpsAgentRequest) (*doma
 	if tenantID == "" {
 		tenantID = ctxkeys.TenantIDFrom(ctx)
 	}
+	if err := a.loadRuntimeConfig(ctx, tenantID, req); err != nil {
+		return nil, apperr.Wrap(err, apperr.ErrAgentFailed)
+	}
 
 	// Signed Alertmanager deliveries already carry a bounded, projected alert
 	// payload. They are admitted as an operational signal even when the alert
@@ -99,14 +127,15 @@ func (a *Agent) Analyze(ctx context.Context, req *domain.OpsAgentRequest) (*doma
 		triggerType = "manual"
 	}
 	task := &repository.OpsTask{
-		TenantID:    tenantID,
-		TaskID:      taskID,
-		TriggerType: triggerType,
-		InputQuery:  req.Query,
-		Status:      string(domain.OpsTaskPending),
-		TraceID:     traceID,
-		CreatedBy:   userID,
-		MaxRetry:    2,
+		TenantID:      tenantID,
+		TaskID:        taskID,
+		TriggerType:   triggerType,
+		InputQuery:    req.Query,
+		Status:        string(domain.OpsTaskPending),
+		TraceID:       traceID,
+		ConfigVersion: runtimeConfigVersion(req.RuntimeConfig),
+		CreatedBy:     userID,
+		MaxRetry:      2,
 	}
 	if err := a.taskRepo.Create(ctx, task); err != nil {
 		return nil, apperr.Wrap(err, apperr.ErrInternal)
@@ -155,12 +184,24 @@ func (a *Agent) ExecuteTask(ctx context.Context, tenantID, taskID, executionToke
 		traceID = trace.NewID()
 	}
 	ctx = ctxkeys.WithTraceID(ctx, traceID)
-	return a.executeTask(ctx, tenantID, taskID, traceID, executionToken, &domain.OpsAgentRequest{
-		TenantID: tenantID,
-		UserID:   task.CreatedBy,
-		Query:    task.InputQuery,
-		Async:    false,
-	}, true)
+	req := &domain.OpsAgentRequest{
+		TenantID:      tenantID,
+		UserID:        task.CreatedBy,
+		Query:         task.InputQuery,
+		Async:         false,
+		RuntimeConfig: nil,
+	}
+	if a.configProvider != nil && task.ConfigVersion != "" {
+		config, configErr := a.configProvider.GetAgentConfig(ctx, tenantID, domain.AgentTypeOps, task.ConfigVersion)
+		if configErr != nil {
+			return nil, apperr.Wrap(configErr, apperr.ErrAgentFailed)
+		}
+		if config == nil {
+			return nil, apperr.ErrAgentFailed
+		}
+		req.RuntimeConfig = config
+	}
+	return a.executeTask(ctx, tenantID, taskID, traceID, executionToken, req, true)
 }
 
 func (a *Agent) executeTask(ctx context.Context, tenantID, taskID, traceID, executionToken string, req *domain.OpsAgentRequest, allowRetry bool) (*domain.OpsAgentResponse, error) {
@@ -263,11 +304,15 @@ func (a *Agent) runAgent(ctx context.Context, tenantID string, req *domain.OpsAg
 	}
 
 	// 2. Wire the plan-execute-replan agent.
+	maxIterations := a.maxIter
+	if req.RuntimeConfig != nil && req.RuntimeConfig.MaxIterations > 0 && req.RuntimeConfig.MaxIterations < maxIterations {
+		maxIterations = req.RuntimeConfig.MaxIterations
+	}
 	planExecuteAgent, err := planexecute.New(ctx, &planexecute.Config{
 		Planner:       plannerAgent,
 		Executor:      executorAgent,
 		Replanner:     replannerAgent,
-		MaxIterations: a.maxIter,
+		MaxIterations: maxIterations,
 	})
 	if err != nil {
 		return nil, "", nil, apperr.Wrap(err, apperr.ErrAgentFailed)
@@ -349,13 +394,14 @@ func (a *Agent) startTrace(ctx context.Context, traceID, tenantID, taskID string
 		userID = ctxkeys.UserIDFrom(ctx)
 	}
 	_ = a.traceRepo.Start(ctx, &repository.AgentTrace{
-		TraceID:   traceID,
-		TenantID:  tenantID,
-		UserID:    userID,
-		AgentType: string(domain.AgentTypeOps),
-		TaskID:    taskID,
-		Query:     req.Query,
-		StartedAt: startedAt,
+		TraceID:       traceID,
+		TenantID:      tenantID,
+		UserID:        userID,
+		AgentType:     string(domain.AgentTypeOps),
+		ConfigVersion: runtimeConfigVersion(req.RuntimeConfig),
+		TaskID:        taskID,
+		Query:         req.Query,
+		StartedAt:     startedAt,
 	})
 }
 

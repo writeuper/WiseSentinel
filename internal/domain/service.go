@@ -213,6 +213,25 @@ type ModelRouter interface {
 	ChatModel(ctx context.Context, profile ModelProfile) (any, error)
 }
 
+// AgentRuntimeConfig is the validated, immutable snapshot selected for one
+// Agent request. The version is persisted with the Trace so an evaluation or
+// incident review can reproduce which configuration actually ran.
+type AgentRuntimeConfig struct {
+	AgentType     AgentType
+	Version       string
+	SystemPrompt  string
+	MaxIterations int
+	Tools         []string
+}
+
+// AgentConfigProvider resolves tenant-scoped active Agent configurations.
+// A nil result means the tenant has no configured version and callers must
+// use their safe built-in defaults.
+type AgentConfigProvider interface {
+	GetActiveAgentConfig(ctx context.Context, tenantID string, agentType AgentType) (*AgentRuntimeConfig, error)
+	GetAgentConfig(ctx context.Context, tenantID string, agentType AgentType, version string) (*AgentRuntimeConfig, error)
+}
+
 // ChatOptions configures chat agent behavior.
 type ChatOptions struct {
 	EnableRAG   bool
@@ -227,6 +246,9 @@ type ChatAgentRequest struct {
 	Query     string
 	History   []*Message
 	Options   ChatOptions
+	// RuntimeConfig is populated by the Agent from the tenant-scoped provider;
+	// callers must not supply an arbitrary version from the request payload.
+	RuntimeConfig *AgentRuntimeConfig
 }
 
 // Citation references a RAG document chunk.
@@ -268,6 +290,9 @@ type OpsAgentRequest struct {
 	MaxIterations int
 	Async         bool
 	TriggerType   string
+	// RuntimeConfig is a durable snapshot selected at task submission. Async
+	// workers reuse this version even if an administrator activates another one.
+	RuntimeConfig *AgentRuntimeConfig
 }
 
 // Evidence captures one tool call performed by the Ops Agent, so the Portal

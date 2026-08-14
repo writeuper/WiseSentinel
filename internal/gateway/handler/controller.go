@@ -1377,18 +1377,19 @@ func toAgentTrace(in *repository.AgentTrace) *v1.AgentTrace {
 		finishedAt = in.FinishedAt.UTC().Format(time.RFC3339)
 	}
 	return &v1.AgentTrace{
-		TraceID:    in.TraceID,
-		TenantID:   in.TenantID,
-		UserID:     in.UserID,
-		AgentType:  in.AgentType,
-		SessionID:  in.SessionID,
-		TaskID:     in.TaskID,
-		Query:      redact.Summary(in.Query, 4000),
-		Status:     in.Status,
-		LatencyMS:  in.LatencyMS,
-		ErrorMsg:   redact.Summary(in.ErrorMsg, 2000),
-		StartedAt:  in.StartedAt.UTC().Format(time.RFC3339),
-		FinishedAt: finishedAt,
+		TraceID:       in.TraceID,
+		TenantID:      in.TenantID,
+		UserID:        in.UserID,
+		AgentType:     in.AgentType,
+		ConfigVersion: in.ConfigVersion,
+		SessionID:     in.SessionID,
+		TaskID:        in.TaskID,
+		Query:         redact.Summary(in.Query, 4000),
+		Status:        in.Status,
+		LatencyMS:     in.LatencyMS,
+		ErrorMsg:      redact.Summary(in.ErrorMsg, 2000),
+		StartedAt:     in.StartedAt.UTC().Format(time.RFC3339),
+		FinishedAt:    finishedAt,
 	}
 }
 

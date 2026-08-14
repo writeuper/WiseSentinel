@@ -17,18 +17,19 @@ import (
 type AgentTraceRepo struct{}
 
 type AgentTrace struct {
-	TraceID    string     `json:"trace_id" orm:"trace_id"`
-	TenantID   string     `json:"tenant_id" orm:"tenant_id"`
-	UserID     string     `json:"user_id" orm:"user_id"`
-	AgentType  string     `json:"agent_type" orm:"agent_type"`
-	SessionID  string     `json:"session_id" orm:"session_id"`
-	TaskID     string     `json:"task_id" orm:"task_id"`
-	Query      string     `json:"query" orm:"query_text"`
-	Status     string     `json:"status" orm:"status"`
-	LatencyMS  int64      `json:"latency_ms" orm:"latency_ms"`
-	ErrorMsg   string     `json:"error_msg" orm:"error_msg"`
-	StartedAt  time.Time  `json:"started_at" orm:"started_at"`
-	FinishedAt *time.Time `json:"finished_at" orm:"finished_at"`
+	TraceID       string     `json:"trace_id" orm:"trace_id"`
+	TenantID      string     `json:"tenant_id" orm:"tenant_id"`
+	UserID        string     `json:"user_id" orm:"user_id"`
+	AgentType     string     `json:"agent_type" orm:"agent_type"`
+	ConfigVersion string     `json:"config_version" orm:"config_version"`
+	SessionID     string     `json:"session_id" orm:"session_id"`
+	TaskID        string     `json:"task_id" orm:"task_id"`
+	Query         string     `json:"query" orm:"query_text"`
+	Status        string     `json:"status" orm:"status"`
+	LatencyMS     int64      `json:"latency_ms" orm:"latency_ms"`
+	ErrorMsg      string     `json:"error_msg" orm:"error_msg"`
+	StartedAt     time.Time  `json:"started_at" orm:"started_at"`
+	FinishedAt    *time.Time `json:"finished_at" orm:"finished_at"`
 }
 
 type AgentTraceStep struct {
@@ -85,15 +86,16 @@ func (r *AgentTraceRepo) ReapStaleRunning(ctx context.Context, age time.Duration
 
 func (r *AgentTraceRepo) Start(ctx context.Context, trace *AgentTrace) error {
 	_, err := g.DB().InsertIgnore(ctx, "ws_agent_trace", g.Map{
-		"trace_id":   trace.TraceID,
-		"tenant_id":  trace.TenantID,
-		"user_id":    trace.UserID,
-		"agent_type": trace.AgentType,
-		"session_id": trace.SessionID,
-		"task_id":    trace.TaskID,
-		"query_text": redact.TelemetryProjection(trace.Query),
-		"status":     "running",
-		"started_at": trace.StartedAt,
+		"trace_id":       trace.TraceID,
+		"tenant_id":      trace.TenantID,
+		"user_id":        trace.UserID,
+		"agent_type":     trace.AgentType,
+		"config_version": redact.Summary(trace.ConfigVersion, 64),
+		"session_id":     trace.SessionID,
+		"task_id":        trace.TaskID,
+		"query_text":     redact.TelemetryProjection(trace.Query),
+		"status":         "running",
+		"started_at":     trace.StartedAt,
 	})
 	return err
 }
