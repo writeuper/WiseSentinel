@@ -136,6 +136,8 @@ def aggregate_index_tasks(rows: list[list[str]]) -> dict[str, Any]:
 
 OPS_TASK_STATUSES = {"pending", "running", "retrying", "timeout", "success", "failed", "awaiting_approval"}
 
+APPROVAL_STATUSES = {"pending", "approved", "rejected", "expired", "canceled"}
+
 
 def normalize_ops_task_status(status: str) -> str:
     value = str(status or "").strip()
@@ -177,6 +179,50 @@ def aggregate_ops_tasks(rows: list[list[str]]) -> dict[str, Any]:
         "failure_rate": round(failed / finished * 100, 2) if finished else None,
         "avg_e2e_latency_ms": round(latency_sum / finished, 3) if finished else None,
         "by_status": dict(sorted(by_status.items())),
+    }
+
+
+def normalize_approval_status(status: str) -> str:
+    value = str(status or "").strip().lower()
+    return value if value in APPROVAL_STATUSES else "other"
+
+
+def aggregate_approvals(rows: list[list[str]]) -> dict[str, Any]:
+    """Aggregate approval decisions and wait latency without identifiers.
+
+    Rows are ``status, decision_latency_ms``. Pending rows carry an empty
+    latency. The query deliberately omits approval/task/user IDs and payloads.
+    """
+    by_status: dict[str, int] = defaultdict(int)
+    decision_latencies: list[float] = []
+    for row in rows:
+        if not row:
+            continue
+        status = normalize_approval_status(row[0])
+        by_status[status] += 1
+        if status == "pending" or len(row) < 2 or not str(row[1] or "").strip():
+            continue
+        try:
+            latency = float(row[1])
+        except ValueError:
+            continue
+        if latency >= 0:
+            decision_latencies.append(latency)
+    total = sum(by_status.values())
+    decided = total - by_status.get("pending", 0)
+    return {
+        "total": total,
+        "decided": decided,
+        "pending": by_status.get("pending", 0),
+        "approved": by_status.get("approved", 0),
+        "rejected": by_status.get("rejected", 0),
+        "expired": by_status.get("expired", 0),
+        "decision_rate": round(decided / total * 100, 2) if total else None,
+        "by_status": dict(sorted(by_status.items())),
+        "decision_latency_samples": len(decision_latencies),
+        "decision_latency_mean_ms": round(sum(decision_latencies) / len(decision_latencies), 3) if decision_latencies else None,
+        "decision_latency_p50_ms": percentile_ms(decision_latencies, 0.50),
+        "decision_latency_p95_ms": percentile_ms(decision_latencies, 0.95),
     }
 
 
@@ -563,6 +609,21 @@ def aggregate(traffic_attestation_path: str | None = None) -> dict[str, Any]:
       WHERE created_at >= NOW() - INTERVAL 24 HOUR
       GROUP BY status
     """)
+    approval_rows = mysql_query("""
+      SELECT status,
+             CASE WHEN status <> 'pending'
+                  THEN TIMESTAMPDIFF(MICROSECOND, created_at, updated_at) / 1000
+                  ELSE NULL END
+      FROM ws_approval
+    """)
+    approval_recent_rows = mysql_query("""
+      SELECT status,
+             CASE WHEN status <> 'pending'
+                  THEN TIMESTAMPDIFF(MICROSECOND, created_at, updated_at) / 1000
+                  ELSE NULL END
+      FROM ws_approval
+      WHERE created_at >= NOW() - INTERVAL 24 HOUR
+    """)
     metrics_text = fetch_raw_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics"))
     result: dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -588,6 +649,8 @@ def aggregate(traffic_attestation_path: str | None = None) -> dict[str, Any]:
         "index_tasks_recent_24h": aggregate_index_tasks(index_task_recent_rows),
         "ops_tasks": aggregate_ops_tasks(ops_task_rows),
         "ops_tasks_recent_24h": aggregate_ops_tasks(ops_task_recent_rows),
+        "approvals": aggregate_approvals(approval_rows),
+        "approvals_recent_24h": aggregate_approvals(approval_recent_rows),
         "traffic_evidence": load_traffic_attestation(traffic_attestation_path or os.environ.get("TRAFFIC_ATTESTATION_FILE", "")),
         "rag_retrieval": parse_prometheus(metrics_text) if metrics_text else fetch_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics")),
         "rag_inventory": parse_rag_inventory(metrics_text),
@@ -634,6 +697,10 @@ def main() -> int:
         print(f"- Ops tasks: total={ops_tasks['total']}, finished={ops_tasks['finished']}, in_flight={ops_tasks['in_flight']}, completion_rate={ops_tasks['completion_rate'] if ops_tasks['completion_rate'] is not None else 'N/A'}%, failure_rate={ops_tasks['failure_rate'] if ops_tasks['failure_rate'] is not None else 'N/A'}%, avg_e2e={ops_tasks['avg_e2e_latency_ms'] if ops_tasks['avg_e2e_latency_ms'] is not None else 'N/A'} ms")
         recent_ops_tasks = report["ops_tasks_recent_24h"]
         print(f"- Ops tasks (last 24h): total={recent_ops_tasks['total']}, finished={recent_ops_tasks['finished']}, in_flight={recent_ops_tasks['in_flight']}, completion_rate={recent_ops_tasks['completion_rate'] if recent_ops_tasks['completion_rate'] is not None else 'N/A'}%, failure_rate={recent_ops_tasks['failure_rate'] if recent_ops_tasks['failure_rate'] is not None else 'N/A'}%, avg_e2e={recent_ops_tasks['avg_e2e_latency_ms'] if recent_ops_tasks['avg_e2e_latency_ms'] is not None else 'N/A'} ms")
+        approvals = report["approvals"]
+        print(f"- Approvals: total={approvals['total']}, decided={approvals['decided']}, pending={approvals['pending']}, decision_rate={approvals['decision_rate'] if approvals['decision_rate'] is not None else 'N/A'}%, decision_p95={approvals['decision_latency_p95_ms'] if approvals['decision_latency_p95_ms'] is not None else 'N/A'} ms")
+        recent_approvals = report["approvals_recent_24h"]
+        print(f"- Approvals (last 24h): total={recent_approvals['total']}, decided={recent_approvals['decided']}, pending={recent_approvals['pending']}, decision_rate={recent_approvals['decision_rate'] if recent_approvals['decision_rate'] is not None else 'N/A'}%, decision_p95={recent_approvals['decision_latency_p95_ms'] if recent_approvals['decision_latency_p95_ms'] is not None else 'N/A'} ms")
         print(f"- Production traffic evidence: {report['traffic_evidence']['status']} ({report['traffic_evidence']['source']})")
         for tool in report["tool_calls"]["by_tool"]:
             zero_note = f", zero_latency={tool['zero_latency_samples']} ({tool['zero_latency_rate']}%)" if tool["zero_latency_samples"] else ""

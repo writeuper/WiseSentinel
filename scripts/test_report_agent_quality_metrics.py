@@ -180,6 +180,25 @@ ws_model_tokens_total{operation="generate",provider="secret",token_type="unknown
         self.assertIsNone(report["avg_e2e_latency_ms"])
         self.assertEqual(report["in_flight"], 2)
 
+    def test_aggregate_approvals_reports_decision_rate_and_latency(self):
+        report = MODULE.aggregate_approvals([
+            ["pending", ""], ["approved", "100"], ["rejected", "200"],
+            ["expired", "500"], ["unexpected", "bad"],
+        ])
+        self.assertEqual(report["total"], 5)
+        self.assertEqual(report["decided"], 4)
+        self.assertEqual(report["pending"], 1)
+        self.assertEqual(report["approved"], 1)
+        self.assertEqual(report["decision_rate"], 80.0)
+        self.assertEqual(report["decision_latency_samples"], 3)
+        self.assertEqual(report["decision_latency_p50_ms"], 200.0)
+        self.assertEqual(report["decision_latency_p95_ms"], 500.0)
+
+    def test_aggregate_approvals_is_explicitly_unavailable_without_decisions(self):
+        report = MODULE.aggregate_approvals([["pending", ""]])
+        self.assertEqual(report["decision_rate"], 0.0)
+        self.assertIsNone(report["decision_latency_p95_ms"])
+
     def test_aggregate_trace_latency_separates_abandoned_and_reports_percentiles(self):
         report = MODULE.aggregate_trace_latency([
             ["success", "100"], ["success", "200"], ["failed", "900"],
