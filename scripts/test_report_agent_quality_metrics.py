@@ -316,6 +316,35 @@ ws_model_tokens_total{operation="generate",provider="secret",token_type="unknown
         self.assertEqual(report["dependency_response_rate"], 33.33)
         self.assertEqual(report["by_tool"][0]["timeout_rate"], 33.33)
 
+    def test_tool_policy_is_fail_closed_when_missing_or_invalid(self):
+        self.assertEqual(MODULE.load_tool_policy(""), {"status": "not_claimed", "reason": "no_tool_policy_configured"})
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "policy.json"
+            path.write_text(json.dumps({"profile": "bad", "tools": {"x": {"risk_level": "L9"}}}), encoding="utf-8")
+            self.assertEqual(MODULE.load_tool_policy(str(path))["status"], "invalid")
+
+    def test_tool_governance_reports_risk_outcomes_without_claiming_approval_binding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "policy.json"
+            path.write_text(json.dumps({
+                "profile": "tool-policy-test",
+                "tools": {
+                    "search_logs": {"risk_level": "L1", "approval_required": False},
+                    "delete_data": {"risk_level": "L2_WRITE", "approval_required": True},
+                },
+            }), encoding="utf-8")
+            policy = MODULE.load_tool_policy(str(path))
+        report = MODULE.aggregate_tool_governance([
+            ["search_logs", "success", "1"], ["search_logs", "error", "2"],
+            ["delete_data", "rejected", "0"], ["unknown", "success", "1"],
+        ], policy)
+        self.assertEqual(report["status"], "estimated")
+        self.assertEqual(report["unknown_tool_calls"], 1)
+        self.assertEqual(report["approval_required_calls"], 1)
+        self.assertEqual(report["approval_binding"], "not_available")
+        self.assertEqual(report["by_risk"][0]["risk_level"], "L1")
+        self.assertEqual(report["by_risk"][1]["rejected"], 1)
+
     def test_traffic_attestation_is_not_claimed_when_missing(self):
         report = MODULE.load_traffic_attestation("")
         self.assertEqual(report, {"status": "not_claimed", "source": "no_attestation_configured"})

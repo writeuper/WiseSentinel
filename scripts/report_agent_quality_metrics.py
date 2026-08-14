@@ -24,6 +24,7 @@ TRAFFIC_STATUSES = {"synthetic", "staging", "production_attested"}
 TRAFFIC_SOURCES = {"gateway_aggregate", "analytics_aggregate", "load_test"}
 BUSINESS_OUTCOME_SOURCES = {"product_analytics", "workflow_audit", "load_test"}
 TOOL_OUTCOMES = {"success", "error", "rejected", "unavailable", "timeout"}
+TOOL_RISK_LEVELS = {"L0", "L1", "L2", "L0_READONLY", "L1_SENSITIVE_READ", "L2_WRITE"}
 
 
 def mysql_query(sql: str) -> list[list[str]]:
@@ -128,6 +129,83 @@ def aggregate_tool_latency(rows: list[list[str]]) -> dict[str, Any]:
         "dependency_availability_rate": round(available / attempted * 100, 2) if attempted else None,
         "dependency_responded": responded,
         "dependency_response_rate": round(responded / attempted * 100, 2) if attempted else None,
+    }
+
+
+def load_tool_policy(path: str) -> dict[str, Any]:
+    """Load an explicit versioned tool-risk policy; never infer risk from names."""
+    if not path:
+        return {"status": "not_claimed", "reason": "no_tool_policy_configured"}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {"status": "invalid", "reason": "tool_policy_unreadable"}
+    if not isinstance(payload, dict) or not isinstance(payload.get("tools"), dict):
+        return {"status": "invalid", "reason": "tool_policy_schema"}
+    profile = str(payload.get("profile") or "").strip()
+    if not profile or len(profile) > 128 or not re.fullmatch(r"[A-Za-z0-9._:-]+", profile):
+        return {"status": "invalid", "reason": "tool_policy_profile"}
+    tools: dict[str, dict[str, Any]] = {}
+    for name, raw in payload["tools"].items():
+        tool_name = str(name or "").strip()
+        if not tool_name or not isinstance(raw, dict):
+            return {"status": "invalid", "reason": "tool_policy_tool_entry"}
+        risk = str(raw.get("risk_level") or "").strip().upper()
+        if risk not in TOOL_RISK_LEVELS:
+            return {"status": "invalid", "reason": "tool_policy_risk_level"}
+        approval_required = raw.get("approval_required", False)
+        if not isinstance(approval_required, bool):
+            return {"status": "invalid", "reason": "tool_policy_approval_flag"}
+        tools[tool_name] = {
+            "risk_level": risk,
+            "approval_required": approval_required,
+        }
+    return {"status": "valid", "profile": profile, "tools": tools}
+
+
+def aggregate_tool_governance(rows: list[list[str]], policy: dict[str, Any]) -> dict[str, Any]:
+    """Join tool outcomes with an explicit risk policy without claiming execution binding."""
+    if policy.get("status") != "valid":
+        return {"status": policy.get("status", "not_claimed"), "reason": policy.get("reason", "tool_policy_unavailable")}
+    grouped: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    unknown_tools = 0
+    for row in rows:
+        if len(row) < 2:
+            continue
+        name = str(row[0] or "").strip()
+        outcome = normalize_tool_outcome(row[1])
+        meta = policy["tools"].get(name)
+        if not meta:
+            unknown_tools += 1
+            continue
+        grouped[meta["risk_level"]].append((name, outcome))
+    by_risk = []
+    for risk in sorted(grouped):
+        samples = grouped[risk]
+        calls = len(samples)
+        success = sum(outcome == "success" for _, outcome in samples)
+        by_risk.append({
+            "risk_level": risk,
+            "tool_count": len({name for name, _ in samples}),
+            "calls": calls,
+            "successes": success,
+            "success_rate": round(success / calls * 100, 2) if calls else None,
+            "rejected": sum(outcome == "rejected" for _, outcome in samples),
+            "unavailable": sum(outcome == "unavailable" for _, outcome in samples),
+            "timeout": sum(outcome == "timeout" for _, outcome in samples),
+            "approval_required_tools": sorted(name for name in {name for name, _ in samples} if policy["tools"][name]["approval_required"]),
+        })
+    approval_tools = {name for name, meta in policy["tools"].items() if meta["approval_required"]}
+    approval_calls = sum(1 for row in rows if row and str(row[0] or "").strip() in approval_tools)
+    return {
+        "status": "estimated",
+        "profile": policy["profile"],
+        "by_risk": by_risk,
+        "unknown_tool_calls": unknown_tools,
+        "approval_required_calls": approval_calls,
+        "approval_binding": "not_available",
+        "approval_binding_reason": "tool_call_record_has_no_approval_execution_binding",
     }
 
 
@@ -813,7 +891,7 @@ def load_business_outcome_attestation(path: str | None) -> dict[str, Any]:
     }
 
 
-def aggregate(traffic_attestation_path: str | None = None, pricing_profile_path: str | None = None, slo_profile_path: str | None = None, business_outcome_attestation_path: str | None = None) -> dict[str, Any]:
+def aggregate(traffic_attestation_path: str | None = None, pricing_profile_path: str | None = None, slo_profile_path: str | None = None, business_outcome_attestation_path: str | None = None, tool_policy_path: str | None = None) -> dict[str, Any]:
     # A non-null finished_at is the durable terminal marker. `abandoned` is a
     # recovery/observability terminal state, not a business execution failure;
     # report it separately so stale-process cleanup cannot inflate failure rate.
@@ -949,6 +1027,10 @@ def aggregate(traffic_attestation_path: str | None = None, pricing_profile_path:
         "tool_calls": {"total": safe_int(tools[0]), "successful": safe_int(tools[1]),
                         "success_rate": round(safe_int(tools[1]) / safe_int(tools[0]) * 100, 2) if safe_int(tools[0]) else None,
                         **aggregate_tool_latency(tool_latency_rows)},
+        "tool_governance": aggregate_tool_governance(
+            tool_latency_rows,
+            load_tool_policy(tool_policy_path or os.environ.get("TOOL_POLICY_FILE", "")),
+        ),
         "index_tasks": aggregate_index_tasks(index_task_rows),
         "index_tasks_recent_24h": aggregate_index_tasks(index_task_recent_rows),
         "ops_tasks": aggregate_ops_tasks(ops_task_rows),
@@ -980,9 +1062,10 @@ def main() -> int:
     parser.add_argument("--pricing-profile", default="", help="Path to an external, versioned USD model pricing profile.")
     parser.add_argument("--slo-profile", default="", help="Path to an external, versioned Agent SLO target profile.")
     parser.add_argument("--business-outcome-attestation", default="", help="Path to an anonymous aggregate business-result attestation JSON artifact.")
+    parser.add_argument("--tool-policy", default="", help="Path to a versioned tool-risk/approval policy JSON artifact.")
     args = parser.parse_args()
     try:
-      report = aggregate(args.traffic_attestation, args.pricing_profile, args.slo_profile, args.business_outcome_attestation)
+      report = aggregate(args.traffic_attestation, args.pricing_profile, args.slo_profile, args.business_outcome_attestation, args.tool_policy)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -1025,6 +1108,8 @@ def main() -> int:
         print(f"- Production traffic evidence: {report['traffic_evidence']['status']} ({report['traffic_evidence']['source']})")
         business = report["business_outcome_evidence"]
         print(f"- Business outcome evidence: {business['status']} ({business['source']}), terminal={business.get('terminal_count', 'N/A')}, success_rate={business.get('success_rate', 'N/A')}")
+        governance = report["tool_governance"]
+        print(f"- Tool governance: {governance['status']} ({governance.get('reason', governance.get('profile', ''))}), approval_binding={governance.get('approval_binding', 'N/A')}")
         print(f"- Tool dependency availability: attempts={report['tool_calls']['dependency_attempts']}, available={report['tool_calls']['dependency_available']}, availability_rate={report['tool_calls']['dependency_availability_rate'] if report['tool_calls']['dependency_availability_rate'] is not None else 'N/A'}%, response_rate={report['tool_calls']['dependency_response_rate'] if report['tool_calls']['dependency_response_rate'] is not None else 'N/A'}%")
         for tool in report["tool_calls"]["by_tool"]:
             zero_note = f", zero_latency={tool['zero_latency_samples']} ({tool['zero_latency_rate']}%)" if tool["zero_latency_samples"] else ""
