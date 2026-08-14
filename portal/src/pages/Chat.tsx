@@ -64,6 +64,9 @@ export default function ChatPage() {
 
   // Refs
   const abortRef = useRef<AbortController | null>(null);
+  // Monotonic request generation prevents callbacks from a canceled stream
+  // writing into a newly selected session after a user clicks "新对话".
+  const requestEpochRef = useRef(0);
   const sendingRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -78,6 +81,7 @@ export default function ChatPage() {
   // Cleanup in-flight request on unmount
   useEffect(() => {
     return () => {
+      requestEpochRef.current += 1;
       if (abortRef.current) {
         abortRef.current.abort();
         abortRef.current = null;
@@ -105,9 +109,10 @@ export default function ChatPage() {
   }, [sessionId, scrollToBottom]);
 
   // Ensure a session exists
-  const ensureSession = useCallback(async (title?: string): Promise<string> => {
+  const ensureSession = useCallback(async (title?: string, requestEpoch?: number): Promise<string> => {
     if (sessionId) return sessionId;
     const data = await createSession(title || '新对话');
+    if (requestEpoch !== undefined && requestEpoch !== requestEpochRef.current) return data.session_id;
     setSessionId(data.session_id);
     setSessionTitle(data.title);
     return data.session_id;
@@ -115,6 +120,7 @@ export default function ChatPage() {
 
   // Create a new session
   const handleNewChat = useCallback(async () => {
+    requestEpochRef.current += 1;
     if (abortRef.current) {
       abortRef.current.abort();
       abortRef.current = null;
@@ -135,6 +141,7 @@ export default function ChatPage() {
     const text = (retry?.text ?? input).trim();
     if (!text || sendingRef.current) return;
     const isRetry = Boolean(retry);
+    const requestEpoch = ++requestEpochRef.current;
     // New user input starts a new logical turn. A manual retry reuses the
     // same key, allowing the backend to return its durable safe response if
     // the browser lost the original response after execution completed.
@@ -160,13 +167,16 @@ export default function ChatPage() {
     // Ensure session
     let sid: string;
     try {
-      sid = await ensureSession(text.slice(0, 30));
+      sid = await ensureSession(text.slice(0, 30), requestEpoch);
     } catch (err: any) {
+      if (requestEpoch !== requestEpochRef.current) return;
       setError(`创建会话失败: ${err.message}`);
       setRetryRequest(null);
       sendingRef.current = false;
       return;
     }
+
+    if (requestEpoch !== requestEpochRef.current) return;
 
     setSending(true);
 
@@ -184,6 +194,7 @@ export default function ChatPage() {
 
       const callbacks: StreamEventCallback = {
         onMessage: (chunk) => {
+          if (requestEpoch !== requestEpochRef.current) return;
           setMessages((prev) => {
             const updated = [...prev];
             const last = updated[updated.length - 1];
@@ -195,37 +206,38 @@ export default function ChatPage() {
           scrollToBottom();
         },
         onCitation: (citation) => {
+          if (requestEpoch !== requestEpochRef.current) return;
           setMessages((prev) => {
             const updated = [...prev];
             const last = updated[updated.length - 1];
             if (last && last.role === 'assistant') {
-              const citations = last.citations || [];
-              citations.push(citation);
+              const citations = [...(last.citations || []), citation];
               updated[updated.length - 1] = { ...last, citations };
             }
             return updated;
           });
         },
         onToolStart: (data) => {
+          if (requestEpoch !== requestEpochRef.current) return;
           setMessages((prev) => {
             const updated = [...prev];
             const last = updated[updated.length - 1];
             if (last && last.role === 'assistant') {
-              const toolCalls = last.toolCalls || [];
-              toolCalls.push({ tool: data, status: 'running' });
+              const toolCalls = [...(last.toolCalls || []), { tool: data, status: 'running' as const }];
               updated[updated.length - 1] = { ...last, toolCalls };
             }
             return updated;
           });
         },
         onToolEnd: (data) => {
+          if (requestEpoch !== requestEpochRef.current) return;
           try {
             const parsed = JSON.parse(data);
             setMessages((prev) => {
               const updated = [...prev];
               const last = updated[updated.length - 1];
               if (last && last.role === 'assistant') {
-                const toolCalls = last.toolCalls || [];
+                const toolCalls = [...(last.toolCalls || [])];
                 for (let i = toolCalls.length - 1; i >= 0; i--) {
                   if (toolCalls[i].tool === parsed.tool || toolCalls[i].status === 'running') {
                     toolCalls[i] = { ...toolCalls[i], status: parsed.status || 'success' };
@@ -239,6 +251,7 @@ export default function ChatPage() {
           } catch { /* ignore parse errors */ }
         },
         onError: (err) => {
+          if (requestEpoch !== requestEpochRef.current) return;
           setError(describeRequestError(err));
           setRetryRequest(err instanceof ApiError && err.code === 50304 ? { text } : null);
           setMessages((prev) => {
@@ -251,6 +264,7 @@ export default function ChatPage() {
           abortRef.current = null;
         },
         onDone: (data) => {
+          if (requestEpoch !== requestEpochRef.current) return;
           try {
             const traceId = (JSON.parse(data) as { trace_id?: string }).trace_id;
             if (traceId) {
@@ -273,6 +287,7 @@ export default function ChatPage() {
         abortRef.current = null; // Clear any stale reference
         abortRef.current = sendChatStream(sid, text, { enable_rag: enableRag, enable_tools: enableTools }, callbacks);
       } catch (err: any) {
+        if (requestEpoch !== requestEpochRef.current) return;
         setError(err.message || '流式请求失败');
         setRetryRequest(null);
         setStreaming(false);
@@ -288,6 +303,7 @@ export default function ChatPage() {
           { enable_rag: enableRag, enable_tools: enableTools },
           idempotencyKey,
         );
+        if (requestEpoch !== requestEpochRef.current) return;
         const assistantMsg: ChatMessage = {
           role: 'assistant',
           content: result.answer,
@@ -305,6 +321,7 @@ export default function ChatPage() {
           setSessionTitle(text.slice(0, 30) + (text.length > 30 ? '...' : ''));
         }
       } catch (err: any) {
+        if (requestEpoch !== requestEpochRef.current) return;
         setError(describeRequestError(err));
         // A network loss and a completed server turn are indistinguishable to
         // the browser, so retain the key and let the API replay safely. In
@@ -316,8 +333,10 @@ export default function ChatPage() {
           idempotencyKey: err instanceof ApiError ? undefined : idempotencyKey,
         });
       } finally {
-        setSending(false);
-        sendingRef.current = false;
+        if (requestEpoch === requestEpochRef.current) {
+          setSending(false);
+          sendingRef.current = false;
+        }
       }
     }
   }, [input, sessionId, ensureSession, useStream, enableRag, enableTools, scrollToBottom]);
