@@ -54,6 +54,7 @@ func TestServiceAPIKeyBindsConfiguredIdentityAndIgnoresRequestTenant(t *testing.
 		"SERVICE_API_TENANT_ID": "tenant-service",
 		"SERVICE_API_USER_ID":   "svc-ops",
 		"SERVICE_API_ROLES":     "operator,sre_admin",
+		"SERVICE_API_SCOPES":    "ops:execute,trace:read",
 	} {
 		old := os.Getenv(key)
 		t.Cleanup(func() { _ = os.Setenv(key, old) })
@@ -72,6 +73,9 @@ func TestServiceAPIKeyBindsConfiguredIdentityAndIgnoresRequestTenant(t *testing.
 	}
 	if roles := ctxkeys.RolesFrom(got); len(roles) != 2 || roles[0] != "operator" || roles[1] != "sre_admin" {
 		t.Fatalf("service roles = %#v", roles)
+	}
+	if scopes := ctxkeys.ScopesFrom(got); len(scopes) != 2 || scopes[0] != "ops:execute" || scopes[1] != "trace:read" {
+		t.Fatalf("service scopes = %#v", scopes)
 	}
 }
 

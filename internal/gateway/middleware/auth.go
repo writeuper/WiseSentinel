@@ -86,7 +86,9 @@ func withServiceAPIKeyIdentity(ctx context.Context, presented string) (context.C
 	}
 	ctx = ctxkeys.WithTenantID(ctx, tenantID)
 	ctx = ctxkeys.WithUserID(ctx, userID)
-	return ctxkeys.WithRoles(ctx, roles), true
+	ctx = ctxkeys.WithRoles(ctx, roles)
+	ctx = ctxkeys.WithAuthMethod(ctx, "service_api_key")
+	return ctxkeys.WithScopes(ctx, configuredScopes(ctx)), true
 }
 
 func configuredRoles(ctx context.Context) []string {
@@ -102,6 +104,26 @@ func configuredRoles(ctx context.Context) []string {
 		}
 	}
 	return roles
+}
+
+func configuredScopes(ctx context.Context) []string {
+	value := strings.TrimSpace(os.Getenv("SERVICE_API_SCOPES"))
+	if value == "" {
+		value = strings.TrimSpace(g.Cfg().MustGet(ctx, "auth.service_scopes", "chat:invoke").String())
+	}
+	parts := strings.Split(value, ",")
+	scopes := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		if scope := strings.TrimSpace(part); scope != "" {
+			if _, ok := seen[scope]; ok {
+				continue
+			}
+			seen[scope] = struct{}{}
+			scopes = append(scopes, scope)
+		}
+	}
+	return scopes
 }
 
 func equalSecret(left, right string) bool {
@@ -125,6 +147,7 @@ func equalSecret(left, right string) bool {
 func withDevelopmentAPIKeyIdentity(ctx context.Context) context.Context {
 	ctx = ctxkeys.WithUserID(ctx, "dev_api_user")
 	ctx = ctxkeys.WithRoles(ctx, []string{"operator"})
+	ctx = ctxkeys.WithAuthMethod(ctx, "development_api_key")
 	return ctxkeys.WithTenantID(ctx, domain.DefaultTenantID)
 }
 
@@ -136,6 +159,7 @@ func withJWTIdentity(ctx context.Context, claims *auth.Claims) (context.Context,
 	}
 	ctx = ctxkeys.WithUserID(ctx, claims.Subject)
 	ctx = ctxkeys.WithRoles(ctx, claims.Roles)
+	ctx = ctxkeys.WithAuthMethod(ctx, "jwt")
 	return ctxkeys.WithTenantID(ctx, claims.TenantID), true
 }
 

@@ -30,6 +30,7 @@ auth:
   service_tenant_id: "default"
   service_user_id: "service_api_user"
   service_roles: "operator"
+  service_scopes: "chat:invoke"
 
 milvus:
   address: "127.0.0.1:19530"

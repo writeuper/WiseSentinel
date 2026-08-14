@@ -13,6 +13,8 @@ const (
 	UserID       ctxKey = "user_id"
 	TraceID      ctxKey = "trace_id"
 	Roles        ctxKey = "roles"
+	AuthMethod   ctxKey = "auth_method"
+	Scopes       ctxKey = "scopes"
 	SessionID    ctxKey = "session_id"
 	ToolSink     ctxKey = "tool_sink" // *[]domain.Evidence, populated by Gateway.Invoke
 	StepSink     ctxKey = "step_sink" // StepSinkFunc, populated by Agent runtime
@@ -74,6 +76,24 @@ func WithRoles(ctx context.Context, roles []string) context.Context {
 
 func RolesFrom(ctx context.Context) []string {
 	v, _ := ctx.Value(Roles).([]string)
+	return v
+}
+
+func WithAuthMethod(ctx context.Context, method string) context.Context {
+	return context.WithValue(ctx, AuthMethod, method)
+}
+
+func AuthMethodFrom(ctx context.Context) string {
+	v, _ := ctx.Value(AuthMethod).(string)
+	return v
+}
+
+func WithScopes(ctx context.Context, scopes []string) context.Context {
+	return context.WithValue(ctx, Scopes, scopes)
+}
+
+func ScopesFrom(ctx context.Context) []string {
+	v, _ := ctx.Value(Scopes).([]string)
 	return v
 }
 
