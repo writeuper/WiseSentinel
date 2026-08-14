@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"wisesentinel-platform/internal/domain"
+	"wisesentinel-platform/internal/gateway/metrics"
 	"wisesentinel-platform/internal/pkg/ctxkeys"
 	"wisesentinel-platform/internal/repository"
 
@@ -77,8 +78,13 @@ func (w *OpsWorker) tick(parent context.Context) {
 	w.health.markTick()
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
-	if _, err := w.taskRepo.ExpireTimedOut(ctx, time.Now()); err != nil {
+	expired, err := w.taskRepo.ExpireTimedOut(ctx, time.Now())
+	if err != nil {
+		metrics.ObserveOpsTaskReaperRun("error")
 		g.Log().Errorf(ctx, "OpsWorker: expire timed out tasks failed: %v", err)
+	} else {
+		metrics.ObserveOpsTaskReaperRun("success")
+		metrics.ObserveOpsTaskTimeouts(expired)
 	}
 
 	tasks, err := w.taskRepo.ListPending(ctx, 10)

@@ -93,6 +93,21 @@ func TestOpsTaskLeaseCASAndBoundedRetryIntegration(t *testing.T) {
 	if err != nil || task == nil || task.Status != string(domain.OpsTaskFailed) || task.RetryCount != 1 {
 		t.Fatalf("terminal task = %#v, err=%v; want failed with retry_count=1", task, err)
 	}
+
+	taskTimeout := "timeout-" + uuid.NewString()
+	createTask(taskTimeout, 0)
+	claimed, err = repo.ClaimRunnable(ctx, tenantID, taskTimeout, "timeout-owner", time.Now().Add(-time.Second))
+	if err != nil || !claimed {
+		t.Fatalf("timeout task claim = %v, %v; want true, nil", claimed, err)
+	}
+	expired, err := repo.ExpireTimedOut(ctx, time.Now())
+	if err != nil || expired < 1 {
+		t.Fatalf("expire timed out = %d, %v; want at least one", expired, err)
+	}
+	timedOut, err := repo.Get(ctx, tenantID, taskTimeout)
+	if err != nil || timedOut == nil || timedOut.Status != string(domain.OpsTaskTimeout) || timedOut.ExecutionToken != "" {
+		t.Fatalf("timed out task = %#v, err=%v; want fenced timeout", timedOut, err)
+	}
 }
 
 func TestOpsTaskPersistenceSuppressesTelemetryBodiesIntegration(t *testing.T) {

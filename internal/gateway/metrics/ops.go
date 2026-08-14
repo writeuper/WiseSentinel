@@ -15,10 +15,21 @@ var (
 		},
 		[]string{"stage", "status"},
 	)
+	opsTaskTimeouts = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "ws_ops_task_timeouts_total",
+		Help: "Ops tasks fenced into timeout by the worker reaper.",
+	})
+	opsTaskReaperRuns = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ws_ops_task_reaper_runs_total",
+			Help: "Ops task timeout reaper cycles by bounded outcome.",
+		},
+		[]string{"outcome"},
+	)
 )
 
 func init() {
-	registry.MustRegister(opsTaskDuration)
+	registry.MustRegister(opsTaskDuration, opsTaskTimeouts, opsTaskReaperRuns)
 }
 
 // ObserveOpsTaskDuration records queue, run and end-to-end task durations.
@@ -27,6 +38,21 @@ func ObserveOpsTaskDuration(stage, status string, seconds float64) {
 		return
 	}
 	opsTaskDuration.WithLabelValues(normalizeOpsStage(stage), normalizeOpsStatus(status)).Observe(seconds)
+}
+
+// ObserveOpsTaskTimeouts records the number of running tasks fenced into a
+// timeout during one worker reaper cycle. Negative values are ignored so a
+// repository/accounting bug cannot decrement the monotonic counter.
+func ObserveOpsTaskTimeouts(count int64) {
+	if count > 0 {
+		opsTaskTimeouts.Add(float64(count))
+	}
+}
+
+// ObserveOpsTaskReaperRun records whether the timeout sweep completed or
+// failed. The label is deliberately bounded and contains no database error.
+func ObserveOpsTaskReaperRun(outcome string) {
+	opsTaskReaperRuns.WithLabelValues(normalizeReaperOutcome(outcome)).Inc()
 }
 
 func normalizeOpsStage(stage string) string {
@@ -42,6 +68,15 @@ func normalizeOpsStatus(status string) string {
 	switch strings.TrimSpace(status) {
 	case "pending", "running", "success", "failed", "timeout", "retrying", "abandoned":
 		return strings.TrimSpace(status)
+	default:
+		return "other"
+	}
+}
+
+func normalizeReaperOutcome(outcome string) string {
+	switch strings.TrimSpace(outcome) {
+	case "success", "error":
+		return strings.TrimSpace(outcome)
 	default:
 		return "other"
 	}

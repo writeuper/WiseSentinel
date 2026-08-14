@@ -75,6 +75,26 @@ groups:
           summary: WiseSentinel Ops task p95 latency is high
           description: Ops end-to-end task p95 latency is above 10 seconds for more than 10 minutes. Check queue backlog, model latency, tool retries and replanning.
 
+      - alert: WiseSentinelOpsTaskTimeouts
+        expr: increase(ws_ops_task_timeouts_total{job="wisesentinel-platform"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: ops
+        annotations:
+          summary: WiseSentinel Ops tasks are timing out
+          description: One or more running Ops tasks were fenced into timeout in the last 15 minutes. Inspect worker health, model/tool latency, lease ownership and dependency saturation.
+
+      - alert: WiseSentinelOpsTaskReaperErrors
+        expr: increase(ws_ops_task_reaper_runs_total{job="wisesentinel-platform",outcome="error"}[10m]) > 0
+        for: 5m
+        labels:
+          severity: critical
+          component: ops
+        annotations:
+          summary: WiseSentinel Ops timeout reaper is failing
+          description: The Ops timeout sweep failed recently; running tasks may remain visible until their next recovery path. Check database availability and worker logs.
+
       - alert: WiseSentinelModelFailureRate
         expr: |
           sum(rate(ws_model_calls_total{job="wisesentinel-platform",outcome=~"timeout|overloaded|upstream_error"}[5m]))
