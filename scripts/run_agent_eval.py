@@ -3,9 +3,12 @@
 
 import argparse
 import csv
+import hashlib
 import json
 import math
+import platform
 import re
+import subprocess
 import sys
 import time
 from collections import Counter
@@ -318,6 +321,32 @@ def wilson_interval(successes: int, total: int, z: float = 1.96) -> Tuple[float 
     center = (proportion + z * z / (2 * total)) / denominator
     margin = z * math.sqrt((proportion * (1 - proportion) + z * z / (4 * total)) / total) / denominator
     return round(max(0.0, center - margin), 6), round(min(1.0, center + margin), 6)
+
+
+def evaluation_metadata(input_path: Path, args: argparse.Namespace, authenticated_tenant: str = "") -> Dict[str, Any]:
+    """Build non-secret provenance metadata for comparing evaluation runs."""
+    try:
+        dataset_sha256 = hashlib.sha256(input_path.read_bytes()).hexdigest()
+    except OSError:
+        dataset_sha256 = "unavailable"
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False, timeout=2
+        ).stdout.strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        commit = "unknown"
+    tenant_fingerprint = hashlib.sha256(authenticated_tenant.encode("utf-8")).hexdigest()[:12] if authenticated_tenant else "unknown"
+    return {
+        "environment": args.environment,
+        "run_label": args.run_label,
+        "model_profile": args.model_profile,
+        "embedding_profile": args.embedding_profile,
+        "dataset_sha256": dataset_sha256,
+        "git_commit": commit,
+        "python_version": platform.python_version(),
+        "tenant_fingerprint": tenant_fingerprint,
+        "case_selection": {"only": args.only, "case": args.case, "limit": args.limit},
+    }
 
 
 def has_knowledge_workflow_evidence(answer: str, citations: Any) -> bool:
@@ -676,6 +705,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--case", default="")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--summary-json", default="", help="Write aggregate metrics only; contains no model/tool output.")
+    parser.add_argument("--environment", default="integration", help="Evaluation environment label, e.g. integration or staging.")
+    parser.add_argument("--run-label", default="", help="Human-readable run label; never put secrets here.")
+    parser.add_argument("--model-profile", default="unspecified", help="Controlled model profile/version label.")
+    parser.add_argument("--embedding-profile", default="unspecified", help="Controlled embedding profile/version label.")
     parser.add_argument("--allow-failures", action="store_true", help="Report failed cases without returning a non-zero status (diagnostics only).")
     parser.add_argument("--resume", action="store_true", help="Resume from --output and skip cases that already passed; retry prior failures.")
     return parser.parse_args()
@@ -709,7 +742,7 @@ def main() -> int:
         return 2
     client = EvalClient(args.base_url, args.api_key, args.timeout, args.retry_429, args.retry_backoff, args.interval, args.tenant_id, args.knowledge_tenant_id, args.bearer_token)
     try:
-        validate_tenant_binding(client, [args.tenant_id, args.knowledge_tenant_id])
+        authenticated_tenant = validate_tenant_binding(client, [args.tenant_id, args.knowledge_tenant_id])
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -731,6 +764,7 @@ def main() -> int:
         write_results(output_path, fieldnames, results)
     write_results(output_path, fieldnames, results)
     metrics = build_metrics(results)
+    metrics["evaluation_metadata"] = evaluation_metadata(input_path, args, authenticated_tenant)
     print_metrics(metrics)
     if args.resume:
         print(f"resumed cases: {skipped}")

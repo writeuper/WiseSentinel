@@ -1,5 +1,7 @@
 import importlib.util
+import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 
 
@@ -11,6 +13,19 @@ SPEC.loader.exec_module(MODULE)
 
 
 class EvalSessionCleanupTests(unittest.TestCase):
+    def test_evaluation_metadata_contains_provenance_without_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cases.csv"
+            path.write_text("case_id,input\nC-1,hello\n", encoding="utf-8")
+            metadata = MODULE.evaluation_metadata(path, SimpleNamespace(
+                environment="staging", run_label="candidate-a", model_profile="model-v2",
+                embedding_profile="embed-v1", only="chat", case="", limit=10,
+            ), "tenant-a")
+        self.assertEqual(metadata["environment"], "staging")
+        self.assertEqual(len(metadata["dataset_sha256"]), 64)
+        self.assertEqual(len(metadata["tenant_fingerprint"]), 12)
+        self.assertNotIn("api_key", str(metadata).lower())
+
     def test_wilson_interval_reflects_small_sample_uncertainty(self) -> None:
         lower, upper = MODULE.wilson_interval(1, 1)
         self.assertLess(lower, 1.0)
