@@ -255,6 +255,35 @@ def aggregate_approvals(rows: list[list[str]]) -> dict[str, Any]:
     }
 
 
+def aggregate_feedback(rows: list[list[str]]) -> dict[str, Any]:
+    """Aggregate bounded user feedback without target/user IDs or comments."""
+    by_target: dict[str, dict[str, int]] = defaultdict(lambda: {"useful": 0, "bad": 0, "other": 0})
+    for row in rows:
+        if len(row) < 2:
+            continue
+        target = str(row[0] or "other").strip().lower()
+        if target not in {"fault_knowledge", "answer", "tool_call"}:
+            target = "other"
+        rating = str(row[1] or "other").strip().lower()
+        if rating not in {"useful", "bad"}:
+            rating = "other"
+        by_target[target][rating] += 1
+    useful = sum(values["useful"] for values in by_target.values())
+    bad = sum(values["bad"] for values in by_target.values())
+    other = sum(values["other"] for values in by_target.values())
+    total = useful + bad + other
+    rated = useful + bad
+    return {
+        "total": total,
+        "rated": rated,
+        "useful": useful,
+        "bad": bad,
+        "other": other,
+        "useful_rate": round(useful / rated * 100, 2) if rated else None,
+        "by_target": {target: dict(sorted(values.items())) for target, values in sorted(by_target.items())},
+    }
+
+
 def aggregate_trace_latency(rows: list[list[str]]) -> dict[str, Any]:
     """Aggregate durable Agent trace latency without exposing identifiers.
 
@@ -713,6 +742,15 @@ def aggregate(traffic_attestation_path: str | None = None, pricing_profile_path:
       FROM ws_approval
       WHERE created_at >= NOW() - INTERVAL 24 HOUR
     """)
+    feedback_rows = mysql_query("""
+      SELECT target_type, rating
+      FROM ws_feedback
+    """)
+    feedback_recent_rows = mysql_query("""
+      SELECT target_type, rating
+      FROM ws_feedback
+      WHERE created_at >= NOW() - INTERVAL 24 HOUR
+    """)
     metrics_text = fetch_raw_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics"))
     result: dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -740,6 +778,8 @@ def aggregate(traffic_attestation_path: str | None = None, pricing_profile_path:
         "ops_tasks_recent_24h": aggregate_ops_tasks(ops_task_recent_rows),
         "approvals": aggregate_approvals(approval_rows),
         "approvals_recent_24h": aggregate_approvals(approval_recent_rows),
+        "feedback": aggregate_feedback(feedback_rows),
+        "feedback_recent_24h": aggregate_feedback(feedback_recent_rows),
         "traffic_evidence": load_traffic_attestation(traffic_attestation_path or os.environ.get("TRAFFIC_ATTESTATION_FILE", "")),
         "rag_retrieval": parse_prometheus(metrics_text) if metrics_text else fetch_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics")),
         "rag_inventory": parse_rag_inventory(metrics_text),
@@ -793,6 +833,10 @@ def main() -> int:
         print(f"- Approvals: total={approvals['total']}, decided={approvals['decided']}, pending={approvals['pending']}, decision_rate={approvals['decision_rate'] if approvals['decision_rate'] is not None else 'N/A'}%, decision_p95={approvals['decision_latency_p95_ms'] if approvals['decision_latency_p95_ms'] is not None else 'N/A'} ms")
         recent_approvals = report["approvals_recent_24h"]
         print(f"- Approvals (last 24h): total={recent_approvals['total']}, decided={recent_approvals['decided']}, pending={recent_approvals['pending']}, decision_rate={recent_approvals['decision_rate'] if recent_approvals['decision_rate'] is not None else 'N/A'}%, decision_p95={recent_approvals['decision_latency_p95_ms'] if recent_approvals['decision_latency_p95_ms'] is not None else 'N/A'} ms")
+        feedback = report["feedback"]
+        print(f"- User feedback: total={feedback['total']}, rated={feedback['rated']}, useful={feedback['useful']}, bad={feedback['bad']}, useful_rate={feedback['useful_rate'] if feedback['useful_rate'] is not None else 'N/A'}%")
+        recent_feedback = report["feedback_recent_24h"]
+        print(f"- User feedback (last 24h): total={recent_feedback['total']}, rated={recent_feedback['rated']}, useful={recent_feedback['useful']}, bad={recent_feedback['bad']}, useful_rate={recent_feedback['useful_rate'] if recent_feedback['useful_rate'] is not None else 'N/A'}%")
         print(f"- Production traffic evidence: {report['traffic_evidence']['status']} ({report['traffic_evidence']['source']})")
         print(f"- Tool dependency availability: attempts={report['tool_calls']['dependency_attempts']}, available={report['tool_calls']['dependency_available']}, availability_rate={report['tool_calls']['dependency_availability_rate'] if report['tool_calls']['dependency_availability_rate'] is not None else 'N/A'}%, response_rate={report['tool_calls']['dependency_response_rate'] if report['tool_calls']['dependency_response_rate'] is not None else 'N/A'}%")
         for tool in report["tool_calls"]["by_tool"]:

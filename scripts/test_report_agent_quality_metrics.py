@@ -229,6 +229,24 @@ ws_model_tokens_total{operation="generate",provider="secret",token_type="unknown
         self.assertEqual(report["decision_rate"], 0.0)
         self.assertIsNone(report["decision_latency_p95_ms"])
 
+    def test_aggregate_feedback_separates_ratings_and_target_types(self):
+        report = MODULE.aggregate_feedback([
+            ["answer", "useful"], ["answer", "bad"],
+            ["fault_knowledge", "useful"], ["tool_call", "unknown"],
+        ])
+        self.assertEqual(report["total"], 4)
+        self.assertEqual(report["rated"], 3)
+        self.assertEqual(report["useful"], 2)
+        self.assertEqual(report["bad"], 1)
+        self.assertEqual(report["other"], 1)
+        self.assertEqual(report["useful_rate"], 66.67)
+        self.assertEqual(report["by_target"]["answer"]["bad"], 1)
+
+    def test_aggregate_feedback_is_na_without_ratings(self):
+        report = MODULE.aggregate_feedback([["answer", "other"]])
+        self.assertEqual(report["total"], 1)
+        self.assertIsNone(report["useful_rate"])
+
     def test_aggregate_trace_latency_separates_abandoned_and_reports_percentiles(self):
         report = MODULE.aggregate_trace_latency([
             ["success", "100"], ["success", "200"], ["failed", "900"],
