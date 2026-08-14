@@ -108,6 +108,21 @@ ws_model_admission_wait_seconds_count{provider="openai",outcome="rejected"} 2
         self.assertEqual(report["mean_wait_accepted_ms"], 2.0)
         self.assertEqual(report["mean_wait_rejected_ms"], 1.0)
 
+    def test_parse_model_tokens_aggregates_bounded_usage(self):
+        report = MODULE.parse_model_tokens("""
+ws_model_tokens_total{operation="generate",provider="openai",token_type="prompt"} 100
+ws_model_tokens_total{operation="generate",provider="openai",token_type="completion"} 40
+ws_model_tokens_total{operation="generate",provider="openai",token_type="total"} 140
+ws_model_tokens_total{operation="stream_complete",provider="other",token_type="total"} 60
+ws_model_tokens_total{operation="generate",provider="secret",token_type="unknown"} 999
+""")
+        self.assertEqual(report["prompt_tokens"], 100)
+        self.assertEqual(report["completion_tokens"], 40)
+        self.assertEqual(report["total_tokens"], 200)
+        self.assertEqual(report["operations"], {"generate": 280, "stream_complete": 60})
+        self.assertEqual(report["input_output_ratio"], 2.5)
+        self.assertEqual(report["usage_samples"], 1)
+
     def test_aggregate_tool_latency_is_grouped_and_payload_free(self):
         report = MODULE.aggregate_tool_latency([
             ["search_logs", "success", "100"],

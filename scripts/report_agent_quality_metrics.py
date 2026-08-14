@@ -340,6 +340,30 @@ def parse_model_admission(text: str) -> dict[str, Any]:
     return result
 
 
+def parse_model_tokens(text: str) -> dict[str, Any]:
+    """Aggregate bounded model token counters without provider/model labels."""
+    totals = {name: 0 for name in ("prompt", "completion", "total")}
+    operations: dict[str, int] = defaultdict(int)
+    for line in text.splitlines():
+        if line.startswith("#") or not line.startswith("ws_model_tokens_total{"):
+            continue
+        match = re.search(r'operation="(generate|stream_handshake|stream_complete)".*token_type="(prompt|completion|total)"[^ ]*\s+([0-9.eE+-]+)$', line)
+        if not match:
+            continue
+        operation, token_type, raw = match.groups()
+        value = int(float(raw))
+        totals[token_type] += value
+        operations[operation] += value
+    return {
+        "prompt_tokens": totals["prompt"],
+        "completion_tokens": totals["completion"],
+        "total_tokens": totals["total"],
+        "operations": dict(sorted(operations.items())),
+        "usage_samples": int(bool(sum(totals.values()))),
+        "input_output_ratio": round(totals["prompt"] / totals["completion"], 3) if totals["completion"] else None,
+    }
+
+
 def fetch_raw_metrics(url: str) -> str:
     try:
         with urllib.request.urlopen(url, timeout=10) as response:
@@ -454,6 +478,7 @@ def aggregate() -> dict[str, Any]:
         "model_generation": parse_model_prometheus(metrics_text),
         "model_breaker": parse_breaker_events(metrics_text),
         "model_admission": parse_model_admission(metrics_text),
+        "model_tokens": parse_model_tokens(metrics_text),
     }
     return result
 
