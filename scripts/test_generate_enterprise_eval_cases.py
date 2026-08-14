@@ -23,6 +23,7 @@ class EnterpriseEvalGeneratorTests(unittest.TestCase):
         self.assertGreaterEqual(sum(bool(case["expected_knowledge"]) for case in cases), 20)
         self.assertGreaterEqual(sum("|" in case["expected_tools"] for case in cases), 15)
         self.assertGreaterEqual(sum(bool(case["forbidden_tools"]) for case in cases), 15)
+        self.assertTrue(all("relevance_label_status" in case for case in cases))
 
     def test_csv_output_is_deterministic_and_schema_compatible(self):
         first, second = MODULE.build_cases(), MODULE.build_cases()

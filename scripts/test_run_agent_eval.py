@@ -61,6 +61,29 @@ class EvalSessionCleanupTests(unittest.TestCase):
         self.assertEqual(report["recall_at_1"], 0.5)
         self.assertEqual(report["recall_at_5"], 0.75)
 
+    def test_relevance_provenance_separates_verified_unverified_and_unlabeled(self) -> None:
+        rows = [
+            {"relevant_doc_ids": "doc-a", "relevance_label_source": "expert_review", "relevance_label_status": "verified"},
+            {"relevant_doc_ids": "doc-b", "relevance_label_source": "model_seed", "relevance_label_status": "unverified"},
+            {"relevant_doc_ids": "", "relevance_label_source": "", "relevance_label_status": ""},
+        ]
+        self.assertEqual(MODULE.relevance_label_summary(rows), {"verified": 1, "unverified": 1, "unlabeled": 1})
+
+    def test_strict_ranking_excludes_unverified_labels(self) -> None:
+        rows = [
+            {"relevant_doc_ids": "doc-a", "retrieved_doc_ids": "doc-a", "relevance_label_source": "model_seed", "relevance_label_status": "unverified"},
+            {"relevant_doc_ids": "doc-b", "retrieved_doc_ids": "doc-b", "relevance_label_source": "human", "relevance_label_status": "verified"},
+        ]
+        report = MODULE.build_rag_ranking_metrics(rows, require_verified=True)
+        self.assertEqual(report["sample_count"], 1)
+        self.assertTrue(report["require_verified"])
+
+    def test_strict_relevance_gate_requires_minimum_reviewed_samples(self) -> None:
+        rows = [{"relevant_doc_ids": "doc-a", "relevance_label_source": "human", "relevance_label_status": "verified"}]
+        with self.assertRaisesRegex(ValueError, "requires at least 2 verified samples"):
+            MODULE.validate_relevance_dataset(rows, minimum_verified=2)
+        self.assertEqual(MODULE.validate_relevance_dataset(rows, minimum_verified=1), (1, 0))
+
     def test_citation_quality_requires_structural_fields_and_counts_versions(self) -> None:
         self.assertEqual(MODULE.citation_quality([{"doc_id":"d", "chunk_id":"c", "source":"s", "snippet":"x", "version":"v1"}, {"doc_id":"d"}]), (2, 1, 1))
         self.assertEqual(MODULE.citation_quality("not-a-list"), (0, 0, 0))

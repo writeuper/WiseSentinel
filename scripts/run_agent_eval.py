@@ -19,6 +19,7 @@ from urllib.request import Request, urlopen
 
 DEFAULT_INPUT = "docs/整理与提升/enterprise_agent_eval_cases_130.csv"
 DEFAULT_OUTPUT = "docs/整理与提升/agent_eval_results.csv"
+VERIFIED_RELEVANCE_SOURCES = {"human", "expert_review", "golden_set"}
 
 
 class RateLimitError(RuntimeError):
@@ -298,18 +299,50 @@ def ranking_metrics(relevant_ids: Any, retrieved_ids: Any, cutoffs: Tuple[int, .
     return metrics
 
 
-def build_rag_ranking_metrics(rows: List[Dict[str, str]]) -> Dict[str, Any]:
-    """Aggregate ranking metrics only for rows with explicit relevance labels."""
+def is_verified_relevance(row: Dict[str, str]) -> bool:
+    """Return whether a row carries an explicitly reviewed relevance label."""
+    return (
+        (row.get("relevance_label_status") or "").strip().lower() == "verified"
+        and (row.get("relevance_label_source") or "").strip().lower() in VERIFIED_RELEVANCE_SOURCES
+    )
+
+
+def relevance_label_summary(rows: List[Dict[str, str]]) -> Dict[str, int]:
+    """Count label provenance without treating unverified labels as quality evidence."""
+    summary = {"verified": 0, "unverified": 0, "unlabeled": 0}
+    for row in rows:
+        if not split_ids(row.get("relevant_doc_ids")):
+            summary["unlabeled"] += 1
+        elif is_verified_relevance(row):
+            summary["verified"] += 1
+        else:
+            summary["unverified"] += 1
+    return summary
+
+
+def build_rag_ranking_metrics(rows: List[Dict[str, str]], require_verified: bool = False) -> Dict[str, Any]:
+    """Aggregate ranking metrics only for explicit labels, optionally reviewed labels."""
     samples = []
     for row in rows:
         relevant = split_ids(row.get("relevant_doc_ids"))
         retrieved = split_ids(row.get("retrieved_doc_ids"))
-        if relevant and retrieved:
+        if relevant and retrieved and (not require_verified or is_verified_relevance(row)):
             samples.append(ranking_metrics(relevant, retrieved))
     if not samples:
-        return {"sample_count": 0, "recall_at_1": None, "recall_at_3": None, "recall_at_5": None, "mrr": None, "ndcg_at_5": None}
+        return {"sample_count": 0, "recall_at_1": None, "recall_at_3": None, "recall_at_5": None, "mrr": None, "ndcg_at_5": None, "require_verified": require_verified}
     keys = ("recall_at_1", "recall_at_3", "recall_at_5", "mrr", "ndcg_at_5")
-    return {"sample_count": len(samples), **{key: round(sum(float(item[key] or 0.0) for item in samples) / len(samples), 6) for key in keys}}
+    return {"sample_count": len(samples), "require_verified": require_verified, **{key: round(sum(float(item[key] or 0.0) for item in samples) / len(samples), 6) for key in keys}}
+
+
+def validate_relevance_dataset(rows: List[Dict[str, str]], minimum_verified: int = 100) -> Tuple[int, int]:
+    """Validate the strict RAG-quality gate and return (verified, unverified)."""
+    summary = relevance_label_summary(rows)
+    if summary["verified"] < minimum_verified:
+        raise ValueError(
+            f"strict relevance gate requires at least {minimum_verified} verified samples; "
+            f"found {summary['verified']} (unverified={summary['unverified']}, unlabeled={summary['unlabeled']})"
+        )
+    return summary["verified"], summary["unverified"]
 
 
 def wilson_interval(successes: int, total: int, z: float = 1.96) -> Tuple[float | None, float | None]:
@@ -346,6 +379,11 @@ def evaluation_metadata(input_path: Path, args: argparse.Namespace, authenticate
         "python_version": platform.python_version(),
         "tenant_fingerprint": tenant_fingerprint,
         "case_selection": {"only": args.only, "case": args.case, "limit": args.limit},
+        "relevance_policy": {
+            "require_verified": bool(getattr(args, "require_verified_relevance", False)),
+            "minimum_verified_samples": int(getattr(args, "min_verified_relevance_samples", 100)),
+            "verified_sources": sorted(VERIFIED_RELEVANCE_SOURCES),
+        },
     }
 
 
@@ -645,11 +683,13 @@ def build_metrics(rows: List[Dict[str, str]]) -> Dict[str, Any]:
         "citation_versioned": citation_versioned,
         "citation_version_rate": citation_versioned / citation_total if citation_total else None,
         "rag_ranking": build_rag_ranking_metrics(rows),
+        "rag_ranking_verified": build_rag_ranking_metrics(rows, require_verified=True),
         "business_keyword_hit_rate": business_keyword_hit / business_keyword_total if business_keyword_total else None,
         "business_keyword_hits": business_keyword_hit,
         "business_keyword_total": business_keyword_total,
         "latency_ms": {"p50": percentile(0.50), "p95": percentile(0.95)},
         "bad_case_distribution": dict(Counter(row.get("bad_case") or "pass" for row in rows)),
+        "relevance_labels": relevance_label_summary(rows),
     }
 
 
@@ -679,6 +719,12 @@ def print_metrics(metrics: Dict[str, Any]) -> None:
         print(f"RAG MRR/nDCG@5: {ranking['mrr']:.4f} / {ranking['ndcg_at_5']:.4f}")
     else:
         print("RAG ranking metrics: N/A (no explicit relevant_doc_ids + retrieved_doc_ids samples)")
+    print(f"RAG relevance labels: {metrics.get('relevance_labels', {})}")
+    verified_ranking = metrics.get("rag_ranking_verified", {})
+    if verified_ranking.get("sample_count", 0):
+        print(f"verified RAG ranking samples: {verified_ranking['sample_count']}")
+    else:
+        print("verified RAG ranking metrics: N/A (requires verified human/expert/golden_set labels)")
     print(f"latency: p50={metrics['latency_ms']['p50']}ms p95={metrics['latency_ms']['p95']}ms")
     print("bad case distribution:")
     for name, count in sorted(metrics["bad_case_distribution"].items(), key=lambda item: (-item[1], item[0])):
@@ -709,6 +755,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-label", default="", help="Human-readable run label; never put secrets here.")
     parser.add_argument("--model-profile", default="unspecified", help="Controlled model profile/version label.")
     parser.add_argument("--embedding-profile", default="unspecified", help="Controlled embedding profile/version label.")
+    parser.add_argument("--require-verified-relevance", action="store_true", help="Fail before API calls unless the selected dataset has enough reviewed RAG relevance labels.")
+    parser.add_argument("--min-verified-relevance-samples", type=int, default=100, help="Minimum reviewed relevance labels required by --require-verified-relevance.")
     parser.add_argument("--allow-failures", action="store_true", help="Report failed cases without returning a non-zero status (diagnostics only).")
     parser.add_argument("--resume", action="store_true", help="Resume from --output and skip cases that already passed; retry prior failures.")
     return parser.parse_args()
@@ -740,6 +788,13 @@ def main() -> int:
     if not cases:
         print("no evaluation cases selected", file=sys.stderr)
         return 2
+    if args.require_verified_relevance:
+        try:
+            verified, unverified = validate_relevance_dataset(cases, max(1, args.min_verified_relevance_samples))
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(f"strict relevance gate passed: verified={verified} unverified={unverified}")
     client = EvalClient(args.base_url, args.api_key, args.timeout, args.retry_429, args.retry_backoff, args.interval, args.tenant_id, args.knowledge_tenant_id, args.bearer_token)
     try:
         authenticated_tenant = validate_tenant_binding(client, [args.tenant_id, args.knowledge_tenant_id])

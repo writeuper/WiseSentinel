@@ -17,6 +17,7 @@ from typing import Dict, Iterable, List
 FIELDS = [
     "case_id", "scene", "input", "expected_route", "expected_tools",
     "forbidden_tools", "expected_source", "expected_knowledge",
+    "relevant_doc_ids", "relevance_label_source", "relevance_label_status",
     "expected_keywords", "actual_route", "actual_tools", "trace_summary",
     "actual_output", "passed", "bad_case", "optimization_action",
 ]
@@ -40,7 +41,9 @@ def row(case_id: str, scene: str, question: str, route: str = "ops",
         "case_id": case_id, "scene": scene, "input": question,
         "expected_route": route, "expected_tools": tools,
         "forbidden_tools": forbidden, "expected_source": source,
-        "expected_knowledge": knowledge, "expected_keywords": keywords,
+        "expected_knowledge": knowledge, "relevant_doc_ids": "",
+        "relevance_label_source": "", "relevance_label_status": "",
+        "expected_keywords": keywords,
         "actual_route": "", "actual_tools": "", "trace_summary": "",
         "actual_output": "", "passed": "", "bad_case": "",
         "optimization_action": "",
