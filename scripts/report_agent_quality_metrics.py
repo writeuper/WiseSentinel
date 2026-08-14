@@ -20,6 +20,7 @@ from typing import Any
 
 TRAFFIC_STATUSES = {"synthetic", "staging", "production_attested"}
 TRAFFIC_SOURCES = {"gateway_aggregate", "analytics_aggregate", "load_test"}
+TOOL_OUTCOMES = {"success", "error", "rejected", "unavailable", "timeout"}
 
 
 def mysql_query(sql: str) -> list[list[str]]:
@@ -63,14 +64,21 @@ def percentile_ms(values: list[float], percentile: float) -> float | None:
     return round(ordered[index], 3)
 
 
+def normalize_tool_outcome(status: str) -> str:
+    value = str(status or "").strip().lower()
+    if value in {"succeeded", "completed"}:
+        return "success"
+    return value if value in TOOL_OUTCOMES else "other"
+
+
 def aggregate_tool_latency(rows: list[list[str]]) -> dict[str, Any]:
-    """Aggregate persisted tool timings without returning input/output bodies."""
+    """Aggregate tool timings and dependency outcomes without payloads."""
     grouped: dict[str, list[tuple[str, float]]] = defaultdict(list)
     for row in rows:
         if len(row) < 3:
             continue
         name = str(row[0] or "unknown")
-        status = str(row[1] or "unknown")
+        status = normalize_tool_outcome(row[1])
         try:
             latency = float(row[2] or 0)
         except ValueError:
@@ -83,12 +91,20 @@ def aggregate_tool_latency(rows: list[list[str]]) -> dict[str, Any]:
     for name in sorted(grouped):
         samples = grouped[name]
         all_values = [latency for _, latency in samples]
-        success_values = [latency for status, latency in samples if status in {"success", "succeeded", "completed"}]
+        outcome_counts = {outcome: sum(1 for status, _ in samples if status == outcome) for outcome in sorted(TOOL_OUTCOMES | {"other"})}
+        success_values = [latency for status, latency in samples if status == "success"]
+        attempted = sum(outcome_counts[outcome] for outcome in ("success", "error", "unavailable", "timeout"))
         result.append({
             "tool_name": name,
             "calls": len(samples),
             "successes": len(success_values),
             "success_rate": round(len(success_values) / len(samples) * 100, 2) if samples else None,
+            "outcomes": outcome_counts,
+            "dependency_attempts": attempted,
+            "dependency_availability_rate": round(outcome_counts["success"] / attempted * 100, 2) if attempted else None,
+            "dependency_response_rate": round((outcome_counts["success"] + outcome_counts["error"]) / attempted * 100, 2) if attempted else None,
+            "unavailable_rate": round(outcome_counts["unavailable"] / attempted * 100, 2) if attempted else None,
+            "timeout_rate": round(outcome_counts["timeout"] / attempted * 100, 2) if attempted else None,
             "mean_ms": round(sum(all_values) / len(all_values), 3) if all_values else None,
             "zero_latency_samples": sum(1 for latency in all_values if latency == 0),
             "zero_latency_rate": round(sum(1 for latency in all_values if latency == 0) / len(all_values) * 100, 2) if all_values else None,
@@ -96,7 +112,18 @@ def aggregate_tool_latency(rows: list[list[str]]) -> dict[str, Any]:
             "p95_ms": percentile_ms(all_values, 0.95),
             "success_p95_ms": percentile_ms(success_values, 0.95),
         })
-    return {"tool_count": len(result), "by_tool": result}
+    attempted = sum(item["dependency_attempts"] for item in result)
+    available = sum(item["outcomes"]["success"] for item in result)
+    responded = sum(item["outcomes"]["success"] + item["outcomes"]["error"] for item in result)
+    return {
+        "tool_count": len(result),
+        "by_tool": result,
+        "dependency_attempts": attempted,
+        "dependency_available": available,
+        "dependency_availability_rate": round(available / attempted * 100, 2) if attempted else None,
+        "dependency_responded": responded,
+        "dependency_response_rate": round(responded / attempted * 100, 2) if attempted else None,
+    }
 
 
 def aggregate_index_tasks(rows: list[list[str]]) -> dict[str, Any]:
@@ -702,9 +729,10 @@ def main() -> int:
         recent_approvals = report["approvals_recent_24h"]
         print(f"- Approvals (last 24h): total={recent_approvals['total']}, decided={recent_approvals['decided']}, pending={recent_approvals['pending']}, decision_rate={recent_approvals['decision_rate'] if recent_approvals['decision_rate'] is not None else 'N/A'}%, decision_p95={recent_approvals['decision_latency_p95_ms'] if recent_approvals['decision_latency_p95_ms'] is not None else 'N/A'} ms")
         print(f"- Production traffic evidence: {report['traffic_evidence']['status']} ({report['traffic_evidence']['source']})")
+        print(f"- Tool dependency availability: attempts={report['tool_calls']['dependency_attempts']}, available={report['tool_calls']['dependency_available']}, availability_rate={report['tool_calls']['dependency_availability_rate'] if report['tool_calls']['dependency_availability_rate'] is not None else 'N/A'}%, response_rate={report['tool_calls']['dependency_response_rate'] if report['tool_calls']['dependency_response_rate'] is not None else 'N/A'}%")
         for tool in report["tool_calls"]["by_tool"]:
             zero_note = f", zero_latency={tool['zero_latency_samples']} ({tool['zero_latency_rate']}%)" if tool["zero_latency_samples"] else ""
-            print(f"- Tool {tool['tool_name']}: calls={tool['calls']}, success_rate={tool['success_rate']}%, p50={tool['p50_ms']} ms, p95={tool['p95_ms']} ms, success_p95={tool['success_p95_ms']} ms{zero_note}")
+            print(f"- Tool {tool['tool_name']}: calls={tool['calls']}, success_rate={tool['success_rate']}%, dependency_availability={tool['dependency_availability_rate'] if tool['dependency_availability_rate'] is not None else 'N/A'}%, response_rate={tool['dependency_response_rate'] if tool['dependency_response_rate'] is not None else 'N/A'}%, unavailable_rate={tool['unavailable_rate'] if tool['unavailable_rate'] is not None else 'N/A'}%, timeout_rate={tool['timeout_rate'] if tool['timeout_rate'] is not None else 'N/A'}%, p50={tool['p50_ms']} ms, p95={tool['p95_ms']} ms, success_p95={tool['success_p95_ms']} ms{zero_note}")
         rag = report["rag_retrieval"]
         inventory = report["rag_inventory"]
         print(f"- RAG inventory: active_documents={inventory['active_documents'] if inventory['active_documents'] is not None else 'N/A'}, published_chunks={inventory['active_published_chunks'] if inventory['active_published_chunks'] is not None else 'N/A'}, legacy_documents={inventory['active_legacy_documents'] if inventory['active_legacy_documents'] is not None else 'N/A'}, physical_vectors={inventory['physical_vectors'] if inventory['physical_vectors'] is not None else 'N/A'}")

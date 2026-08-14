@@ -140,6 +140,11 @@ ws_model_tokens_total{operation="generate",provider="secret",token_type="unknown
         self.assertEqual(logs["calls"], 3)
         self.assertEqual(logs["successes"], 2)
         self.assertEqual(logs["success_rate"], 66.67)
+        self.assertEqual(logs["outcomes"]["success"], 2)
+        self.assertEqual(logs["outcomes"]["error"], 1)
+        self.assertEqual(logs["dependency_availability_rate"], 66.67)
+        self.assertEqual(logs["dependency_response_rate"], 100.0)
+        self.assertEqual(logs["unavailable_rate"], 0.0)
         self.assertEqual(logs["zero_latency_samples"], 0)
         self.assertEqual(logs["p50_ms"], 200.0)
         self.assertEqual(logs["p95_ms"], 900.0)
@@ -214,6 +219,17 @@ ws_model_tokens_total{operation="generate",provider="secret",token_type="unknown
         report = MODULE.aggregate_tool_latency([["fast", "success", "0"], ["fast", "error", "2"]])
         self.assertEqual(report["by_tool"][0]["zero_latency_samples"], 1)
         self.assertEqual(report["by_tool"][0]["zero_latency_rate"], 50.0)
+
+    def test_tool_dependency_availability_excludes_governance_rejections(self):
+        report = MODULE.aggregate_tool_latency([
+            ["tool", "success", "10"], ["tool", "unavailable", "0"],
+            ["tool", "timeout", "100"], ["tool", "rejected", "0"],
+        ])
+        self.assertEqual(report["dependency_attempts"], 3)
+        self.assertEqual(report["dependency_available"], 1)
+        self.assertEqual(report["dependency_availability_rate"], 33.33)
+        self.assertEqual(report["dependency_response_rate"], 33.33)
+        self.assertEqual(report["by_tool"][0]["timeout_rate"], 33.33)
 
     def test_traffic_attestation_is_not_claimed_when_missing(self):
         report = MODULE.load_traffic_attestation("")
