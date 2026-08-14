@@ -1,5 +1,7 @@
 import importlib.util
 import pathlib
+import json
+import tempfile
 import unittest
 
 
@@ -193,6 +195,37 @@ ws_model_tokens_total{operation="generate",provider="secret",token_type="unknown
         report = MODULE.aggregate_tool_latency([["fast", "success", "0"], ["fast", "error", "2"]])
         self.assertEqual(report["by_tool"][0]["zero_latency_samples"], 1)
         self.assertEqual(report["by_tool"][0]["zero_latency_rate"], 50.0)
+
+    def test_traffic_attestation_is_not_claimed_when_missing(self):
+        report = MODULE.load_traffic_attestation("")
+        self.assertEqual(report, {"status": "not_claimed", "source": "no_attestation_configured"})
+
+    def test_valid_production_attestation_exposes_only_aggregate_fields(self):
+        payload = {
+            "status": "production_attested", "source": "gateway_aggregate",
+            "window_start": "2026-08-14T00:00:00Z", "window_end": "2026-08-14T01:00:00Z",
+            "request_count": 1000, "tenant_count": 12, "user_count": 80,
+            "attestation_fingerprint": "a" * 64, "raw_tenant_ids": ["must-not-leak"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "traffic.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            report = MODULE.load_traffic_attestation(str(path))
+        self.assertTrue(report["attested"])
+        self.assertEqual(report["request_count"], 1000)
+        self.assertNotIn("raw_tenant_ids", report)
+
+    def test_invalid_attestation_fails_closed_for_fingerprint_window_and_counts(self):
+        cases = [
+            {"status": "production_attested", "source": "gateway_aggregate", "attestation_fingerprint": "short"},
+            {"status": "staging", "source": "load_test", "window_start": "2026-08-14T01:00:00Z", "window_end": "2026-08-14T00:00:00Z", "request_count": 1, "tenant_count": 1, "user_count": 1},
+            {"status": "staging", "source": "load_test", "window_start": "2026-08-14T00:00:00Z", "window_end": "2026-08-14T01:00:00Z", "request_count": 1, "tenant_count": 2, "user_count": 1},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            for index, payload in enumerate(cases):
+                path = pathlib.Path(directory) / f"traffic-{index}.json"
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                self.assertEqual(MODULE.load_traffic_attestation(str(path))["status"], "invalid")
 
 
 if __name__ == "__main__":

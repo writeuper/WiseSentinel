@@ -18,6 +18,9 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
+TRAFFIC_STATUSES = {"synthetic", "staging", "production_attested"}
+TRAFFIC_SOURCES = {"gateway_aggregate", "analytics_aggregate", "load_test"}
+
 
 def mysql_query(sql: str) -> list[list[str]]:
     """Run a read-only aggregate query through the configured MySQL container."""
@@ -428,7 +431,54 @@ def fetch_metrics(url: str) -> dict[str, Any]:
                 "mean_ms": None, "success_mean_ms": None, "p95_semantics": None}
 
 
-def aggregate() -> dict[str, Any]:
+def load_traffic_attestation(path: str | None) -> dict[str, Any]:
+    """Load a privacy-safe traffic attestation, failing closed on bad input."""
+    base = {"status": "not_claimed", "source": "no_attestation_configured"}
+    if not path:
+        return base
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {"status": "invalid", "source": "attestation_unreadable"}
+    if not isinstance(payload, dict):
+        return {"status": "invalid", "source": "attestation_not_object"}
+    status = str(payload.get("status") or "").strip().lower()
+    source = str(payload.get("source") or "").strip().lower()
+    if status not in TRAFFIC_STATUSES or source not in TRAFFIC_SOURCES:
+        return {"status": "invalid", "source": "attestation_enum_invalid"}
+    if status == "production_attested" and not re.fullmatch(r"[0-9a-f]{64}", str(payload.get("attestation_fingerprint") or "").lower()):
+        return {"status": "invalid", "source": "attestation_fingerprint_invalid"}
+    try:
+        request_count = int(payload.get("request_count"))
+        tenant_count = int(payload.get("tenant_count"))
+        user_count = int(payload.get("user_count"))
+    except (TypeError, ValueError):
+        return {"status": "invalid", "source": "attestation_count_invalid"}
+    if min(request_count, tenant_count, user_count) < 0 or tenant_count > request_count or user_count > request_count:
+        return {"status": "invalid", "source": "attestation_count_out_of_range"}
+    window_start = str(payload.get("window_start") or "").strip()
+    window_end = str(payload.get("window_end") or "").strip()
+    try:
+        start = datetime.fromisoformat(window_start.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(window_end.replace("Z", "+00:00"))
+        if start.tzinfo is None or end.tzinfo is None or end <= start:
+            raise ValueError
+    except ValueError:
+        return {"status": "invalid", "source": "attestation_window_invalid"}
+    return {
+        "status": status,
+        "source": source,
+        "window_start": window_start,
+        "window_end": window_end,
+        "request_count": request_count,
+        "tenant_count": tenant_count,
+        "user_count": user_count,
+        "attested": status == "production_attested",
+    }
+
+
+def aggregate(traffic_attestation_path: str | None = None) -> dict[str, Any]:
     # A non-null finished_at is the durable terminal marker. `abandoned` is a
     # recovery/observability terminal state, not a business execution failure;
     # report it separately so stale-process cleanup cannot inflate failure rate.
@@ -538,10 +588,7 @@ def aggregate() -> dict[str, Any]:
         "index_tasks_recent_24h": aggregate_index_tasks(index_task_recent_rows),
         "ops_tasks": aggregate_ops_tasks(ops_task_rows),
         "ops_tasks_recent_24h": aggregate_ops_tasks(ops_task_recent_rows),
-        "traffic_evidence": {
-            "status": "not_claimed",
-            "source": "durable application aggregates and Prometheus; no attested production-user feed configured",
-        },
+        "traffic_evidence": load_traffic_attestation(traffic_attestation_path or os.environ.get("TRAFFIC_ATTESTATION_FILE", "")),
         "rag_retrieval": parse_prometheus(metrics_text) if metrics_text else fetch_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics")),
         "rag_inventory": parse_rag_inventory(metrics_text),
         "model_generation": parse_model_prometheus(metrics_text),
@@ -555,9 +602,10 @@ def aggregate() -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--format", choices=("json", "markdown"), default="json")
+    parser.add_argument("--traffic-attestation", default="", help="Path to an anonymous, validated traffic attestation JSON artifact.")
     args = parser.parse_args()
     try:
-        report = aggregate()
+        report = aggregate(args.traffic_attestation)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
