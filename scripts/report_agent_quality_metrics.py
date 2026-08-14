@@ -584,6 +584,67 @@ def estimate_model_cost(tokens: dict[str, Any], pricing: dict[str, Any], generat
     }
 
 
+def load_slo_profile(path: str) -> dict[str, Any]:
+    """Load a versioned SLO target profile, failing closed on bad input."""
+    if not path:
+        return {"status": "not_claimed", "reason": "no_slo_profile_configured"}
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+        payload = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {"status": "invalid", "reason": "slo_profile_unreadable"}
+    if not isinstance(payload, dict):
+        return {"status": "invalid", "reason": "slo_profile_schema"}
+    profile = str(payload.get("profile") or "").strip()
+    try:
+        success_target = float(payload.get("success_rate_target"))
+        p95_target = float(payload["p95_latency_ms"]) if payload.get("p95_latency_ms") is not None else None
+        p99_target = float(payload["p99_latency_ms"]) if payload.get("p99_latency_ms") is not None else None
+    except (TypeError, ValueError, KeyError):
+        return {"status": "invalid", "reason": "slo_profile_targets"}
+    if not profile or len(profile) > 128 or not re.fullmatch(r"[A-Za-z0-9._:-]+", profile):
+        return {"status": "invalid", "reason": "slo_profile_name"}
+    if not math.isfinite(success_target) or not 0 <= success_target <= 1:
+        return {"status": "invalid", "reason": "slo_profile_success_target"}
+    if p95_target is None and p99_target is None:
+        return {"status": "invalid", "reason": "slo_profile_latency_target_missing"}
+    if any(value is not None and (not math.isfinite(value) or value <= 0) for value in (p95_target, p99_target)):
+        return {"status": "invalid", "reason": "slo_profile_latency_target"}
+    return {
+        "status": "valid", "profile": profile, "success_rate_target": success_target,
+        "p95_latency_ms": p95_target, "p99_latency_ms": p99_target,
+        "slo_fingerprint": hashlib.sha256(raw).hexdigest(),
+    }
+
+
+def evaluate_slo(success_count: int, failure_count: int, latency: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
+    """Evaluate business error budget and latency targets against finished traces."""
+    if profile.get("status") != "valid":
+        return {"status": profile.get("status", "not_claimed"), "reason": profile.get("reason", "slo_unavailable")}
+    business_total = max(0, int(success_count)) + max(0, int(failure_count))
+    if business_total == 0:
+        return {"status": "not_available", "reason": "no_business_terminal_samples", "profile": profile["profile"], "slo_fingerprint": profile["slo_fingerprint"]}
+    target = float(profile["success_rate_target"])
+    allowed_errors = business_total * (1 - target)
+    errors = max(0, int(failure_count))
+    budget_remaining = allowed_errors - errors
+    p95_actual = latency.get("p95_ms")
+    p99_actual = latency.get("p99_ms")
+    p95_ok = profile.get("p95_latency_ms") is None or (p95_actual is not None and p95_actual <= profile["p95_latency_ms"])
+    p99_ok = profile.get("p99_latency_ms") is None or (p99_actual is not None and p99_actual <= profile["p99_latency_ms"])
+    return {
+        "status": "within_budget" if budget_remaining >= -1e-9 and p95_ok and p99_ok else "breached",
+        "profile": profile["profile"], "slo_fingerprint": profile["slo_fingerprint"],
+        "business_total": business_total, "success_count": int(success_count), "failure_count": errors,
+        "success_rate": round(success_count / business_total, 6), "success_rate_target": target,
+        "allowed_errors": round(allowed_errors, 3), "error_budget_remaining": round(budget_remaining, 3),
+        "error_budget_consumed_pct": round(errors / allowed_errors * 100, 3) if allowed_errors else (0.0 if errors == 0 else None),
+        "p95_actual_ms": p95_actual, "p95_target_ms": profile.get("p95_latency_ms"), "p95_within_target": p95_ok,
+        "p99_actual_ms": p99_actual, "p99_target_ms": profile.get("p99_latency_ms"), "p99_within_target": p99_ok,
+    }
+
+
 def fetch_raw_metrics(url: str) -> str:
     try:
         with urllib.request.urlopen(url, timeout=10) as response:
@@ -649,7 +710,7 @@ def load_traffic_attestation(path: str | None) -> dict[str, Any]:
     }
 
 
-def aggregate(traffic_attestation_path: str | None = None, pricing_profile_path: str | None = None) -> dict[str, Any]:
+def aggregate(traffic_attestation_path: str | None = None, pricing_profile_path: str | None = None, slo_profile_path: str | None = None) -> dict[str, Any]:
     # A non-null finished_at is the durable terminal marker. `abandoned` is a
     # recovery/observability terminal state, not a business execution failure;
     # report it separately so stale-process cleanup cannot inflate failure rate.
@@ -797,6 +858,8 @@ def aggregate(traffic_attestation_path: str | None = None, pricing_profile_path:
     }
     pricing = load_pricing_profile(pricing_profile_path or os.environ.get("MODEL_PRICING_PROFILE_FILE", ""))
     result["model_cost"] = estimate_model_cost(result["model_tokens"], pricing, result["model_generation"].get("sample_count"))
+    slo = load_slo_profile(slo_profile_path or os.environ.get("AGENT_SLO_PROFILE_FILE", ""))
+    result["slo"] = evaluate_slo(safe_int(traces[1]), safe_int(traces[2]), result["trace_latency"]["business_terminal"], slo)
     return result
 
 
@@ -805,9 +868,10 @@ def main() -> int:
     parser.add_argument("--format", choices=("json", "markdown"), default="json")
     parser.add_argument("--traffic-attestation", default="", help="Path to an anonymous, validated traffic attestation JSON artifact.")
     parser.add_argument("--pricing-profile", default="", help="Path to an external, versioned USD model pricing profile.")
+    parser.add_argument("--slo-profile", default="", help="Path to an external, versioned Agent SLO target profile.")
     args = parser.parse_args()
     try:
-        report = aggregate(args.traffic_attestation, args.pricing_profile)
+        report = aggregate(args.traffic_attestation, args.pricing_profile, args.slo_profile)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -877,6 +941,11 @@ def main() -> int:
             print(f"- Model cost estimate: {cost['total_cost']} {cost['currency']} (prompt={cost['prompt_cost']}, completion={cost['completion_cost']}, avg/generation={cost['avg_cost_per_generation'] if cost['avg_cost_per_generation'] is not None else 'N/A'}, profile={cost['profile']})")
         else:
             print(f"- Model cost estimate: N/A ({cost.get('reason', cost.get('status', 'unavailable'))})")
+        slo = report["slo"]
+        if slo.get("status") in {"within_budget", "breached"}:
+            print(f"- SLO/error budget: status={slo['status']}, success_rate={slo['success_rate']}, target={slo['success_rate_target']}, budget_remaining={slo['error_budget_remaining']}, p95={slo['p95_actual_ms']}/{slo['p95_target_ms']} ms, p99={slo['p99_actual_ms']}/{slo['p99_target_ms']} ms")
+        else:
+            print(f"- SLO/error budget: N/A ({slo.get('reason', slo.get('status', 'unavailable'))})")
         if rag["sample_count"] < 30 or rag.get("success_sample_count", 0) < 30:
             print("\n> RAG P95 is provisional when fewer than 30 total and successful retrieval samples exist; this is not a production SLA.")
     return 0

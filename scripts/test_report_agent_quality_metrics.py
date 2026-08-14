@@ -152,6 +152,26 @@ ws_model_tokens_total{operation="generate",provider="secret",token_type="unknown
         self.assertEqual(cost["status"], "not_claimed")
         self.assertNotIn("total_cost", cost)
 
+    def test_slo_profile_and_error_budget_are_fail_closed_and_versioned(self):
+        self.assertEqual(MODULE.load_slo_profile("")["status"], "not_claimed")
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "slo.json"
+            path.write_text(json.dumps({"profile": "agent-v1", "success_rate_target": 0.9, "p95_latency_ms": 500, "p99_latency_ms": 1000}), encoding="utf-8")
+            profile = MODULE.load_slo_profile(str(path))
+        result = MODULE.evaluate_slo(9, 1, {"p95_ms": 400, "p99_ms": 800}, profile)
+        self.assertEqual(result["status"], "within_budget")
+        self.assertEqual(result["allowed_errors"], 1.0)
+        self.assertEqual(result["error_budget_remaining"], 0.0)
+        self.assertTrue(result["p99_within_target"])
+
+    def test_slo_budget_breach_and_no_sample_semantics(self):
+        profile = {"status": "valid", "profile": "agent-v1", "success_rate_target": 0.99, "p95_latency_ms": 100, "p99_latency_ms": 200, "slo_fingerprint": "f" * 64}
+        breached = MODULE.evaluate_slo(98, 2, {"p95_ms": 101, "p99_ms": 201}, profile)
+        self.assertEqual(breached["status"], "breached")
+        self.assertFalse(breached["p95_within_target"])
+        no_sample = MODULE.evaluate_slo(0, 0, {}, profile)
+        self.assertEqual(no_sample["status"], "not_available")
+
     def test_aggregate_tool_latency_is_grouped_and_payload_free(self):
         report = MODULE.aggregate_tool_latency([
             ["search_logs", "success", "100"],
