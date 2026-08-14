@@ -203,7 +203,13 @@ func (s *Service) ExecuteIndexTask(ctx context.Context, tenantID, taskID, execut
 		// Staged vectors remain unreadable until a later GC pass. If this worker
 		// still owns the task, record the supersession; a lost lease simply wins
 		// the CAS and cannot be compensated by deleting vectors.
-		_, _ = s.tasks.MarkFinishedIfOwned(ctx, tenantID, taskID, executionToken, string(domain.IndexTaskFailed), 0, "index generation superseded before publication")
+		marked, markErr := s.tasks.MarkFinishedIfOwned(ctx, tenantID, taskID, executionToken, string(domain.IndexTaskFailed), 0, "index generation superseded before publication")
+		if markErr != nil {
+			return apperr.Wrap(markErr, apperr.ErrRAGFailed)
+		}
+		if !marked {
+			return apperr.ErrConflict
+		}
 	}
 	return nil
 }
