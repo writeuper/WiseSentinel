@@ -336,14 +336,17 @@ ws_model_tokens_total{operation="generate",provider="secret",token_type="unknown
             policy = MODULE.load_tool_policy(str(path))
         report = MODULE.aggregate_tool_governance([
             ["search_logs", "success", "1"], ["search_logs", "error", "2"],
-            ["delete_data", "rejected", "0"], ["unknown", "success", "1"],
+            ["delete_data", "rejected", "0", "approval-1"], ["unknown", "success", "1"],
         ], policy)
         self.assertEqual(report["status"], "estimated")
         self.assertEqual(report["unknown_tool_calls"], 1)
         self.assertEqual(report["approval_required_calls"], 1)
-        self.assertEqual(report["approval_binding"], "not_available")
+        self.assertEqual(report["approval_binding"], "reference_observed")
         self.assertEqual(report["by_risk"][0]["risk_level"], "L1")
         self.assertEqual(report["by_risk"][1]["rejected"], 1)
+
+        missing = MODULE.aggregate_tool_governance([["delete_data", "success", "1", ""]], policy)
+        self.assertEqual(missing["approval_binding"], "missing_reference")
 
     def test_traffic_attestation_is_not_claimed_when_missing(self):
         report = MODULE.load_traffic_attestation("")

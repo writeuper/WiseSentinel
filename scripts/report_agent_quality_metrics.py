@@ -197,15 +197,24 @@ def aggregate_tool_governance(rows: list[list[str]], policy: dict[str, Any]) -> 
             "approval_required_tools": sorted(name for name in {name for name, _ in samples} if policy["tools"][name]["approval_required"]),
         })
     approval_tools = {name for name, meta in policy["tools"].items() if meta["approval_required"]}
-    approval_calls = sum(1 for row in rows if row and str(row[0] or "").strip() in approval_tools)
+    approval_rows = [row for row in rows if row and str(row[0] or "").strip() in approval_tools]
+    approval_calls = len(approval_rows)
+    approval_bound = sum(1 for row in approval_rows if len(row) > 3 and str(row[3] or "").strip())
+    if not approval_rows:
+        binding = "not_applicable"
+    elif approval_bound == approval_calls:
+        binding = "reference_observed"
+    else:
+        binding = "missing_reference"
     return {
         "status": "estimated",
         "profile": policy["profile"],
         "by_risk": by_risk,
         "unknown_tool_calls": unknown_tools,
         "approval_required_calls": approval_calls,
-        "approval_binding": "not_available",
-        "approval_binding_reason": "tool_call_record_has_no_approval_execution_binding",
+        "approval_bound_calls": approval_bound,
+        "approval_binding": binding,
+        "approval_binding_reason": "approval reference is recorded; approval state and side-effect execution still require a dedicated executor check",
     }
 
 
@@ -949,7 +958,7 @@ def aggregate(traffic_attestation_path: str | None = None, pricing_profile_path:
       FROM ws_tool_call_record
     """)[0]
     tool_latency_rows = mysql_query("""
-      SELECT tool_name, status, latency_ms
+      SELECT tool_name, status, latency_ms, approval_id
       FROM ws_tool_call_record
       WHERE latency_ms >= 0
     """)

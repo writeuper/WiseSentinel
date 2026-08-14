@@ -10,15 +10,16 @@ import (
 )
 
 type ToolCallRecord struct {
-	TenantID  string    `json:"tenant_id" orm:"tenant_id"`
-	TraceID   string    `json:"trace_id" orm:"trace_id"`
-	ToolName  string    `json:"tool_name" orm:"tool_name"`
-	AgentType string    `json:"agent_type" orm:"agent_type"`
-	Input     string    `json:"input_json" orm:"input_json"`
-	Output    string    `json:"output_text" orm:"output_text"`
-	Status    string    `json:"status" orm:"status"`
-	LatencyMS int64     `json:"latency_ms" orm:"latency_ms"`
-	CreatedAt time.Time `json:"created_at" orm:"created_at"`
+	TenantID   string    `json:"tenant_id" orm:"tenant_id"`
+	TraceID    string    `json:"trace_id" orm:"trace_id"`
+	ApprovalID string    `json:"approval_id" orm:"approval_id"`
+	ToolName   string    `json:"tool_name" orm:"tool_name"`
+	AgentType  string    `json:"agent_type" orm:"agent_type"`
+	Input      string    `json:"input_json" orm:"input_json"`
+	Output     string    `json:"output_text" orm:"output_text"`
+	Status     string    `json:"status" orm:"status"`
+	LatencyMS  int64     `json:"latency_ms" orm:"latency_ms"`
+	CreatedAt  time.Time `json:"created_at" orm:"created_at"`
 }
 
 type ToolCallRecordRepo struct{}
@@ -29,6 +30,7 @@ func (r *ToolCallRecordRepo) Create(ctx context.Context, rec *ToolCallRecord) er
 	_, err := g.DB().Insert(ctx, "ws_tool_call_record", g.Map{
 		"tenant_id":   rec.TenantID,
 		"trace_id":    rec.TraceID,
+		"approval_id": rec.ApprovalID,
 		"tool_name":   rec.ToolName,
 		"agent_type":  rec.AgentType,
 		"input_json":  redact.TelemetryProjection(rec.Input),

@@ -283,14 +283,15 @@ func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*
 			tenantID = ctxkeys.TenantIDFrom(ctx)
 		}
 		_ = recordRepo.Create(ctx, &repository.ToolCallRecord{
-			TenantID:  tenantID,
-			TraceID:   req.TraceID,
-			ToolName:  req.ToolName,
-			AgentType: string(req.AgentType),
-			Input:     inputSummary,
-			Output:    outputSummary,
-			Status:    respStatus,
-			LatencyMS: latency,
+			TenantID:   tenantID,
+			TraceID:    req.TraceID,
+			ApprovalID: req.ApprovalID,
+			ToolName:   req.ToolName,
+			AgentType:  string(req.AgentType),
+			Input:      inputSummary,
+			Output:     outputSummary,
+			Status:     respStatus,
+			LatencyMS:  latency,
 		})
 	}
 	response := &domain.ToolInvokeResponse{

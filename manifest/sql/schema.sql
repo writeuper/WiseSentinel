@@ -271,6 +271,7 @@ CREATE TABLE IF NOT EXISTS ws_tool_call_record (
     id          BIGINT PRIMARY KEY AUTO_INCREMENT,
     tenant_id   VARCHAR(64)  NOT NULL,
     trace_id    VARCHAR(64)  NOT NULL DEFAULT '',
+    approval_id VARCHAR(64)  NOT NULL DEFAULT '' COMMENT 'durable approval reference; empty for non-approval calls',
     tool_name   VARCHAR(128) NOT NULL,
     agent_type  VARCHAR(32)  NOT NULL DEFAULT '',
     input_json  TEXT,
@@ -279,6 +280,7 @@ CREATE TABLE IF NOT EXISTS ws_tool_call_record (
     latency_ms  BIGINT       NOT NULL DEFAULT 0,
     created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     KEY idx_trace_tool (trace_id, id),
+    KEY idx_approval (tenant_id, approval_id, created_at),
     KEY idx_tenant_tool_time (tenant_id, tool_name, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

@@ -172,12 +172,16 @@ type ToolMeta struct {
 
 // ToolInvokeRequest is a tool call from an agent.
 type ToolInvokeRequest struct {
-	TenantID  string
-	UserID    string
-	TraceID   string
-	ToolName  string
-	Input     json.RawMessage
-	AgentType AgentType
+	TenantID string
+	UserID   string
+	TraceID  string
+	// ApprovalID is the durable approval reference bound to this invocation.
+	// It is optional for read-only tools and must never be inferred from a
+	// request payload or a UI decision.
+	ApprovalID string
+	ToolName   string
+	Input      json.RawMessage
+	AgentType  AgentType
 }
 
 // ToolInvokeResponse is the result of a tool call.
