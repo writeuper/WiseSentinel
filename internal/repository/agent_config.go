@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"wisesentinel-platform/internal/domain"
 
@@ -19,6 +20,63 @@ import (
 type AgentConfigRepo struct{}
 
 func NewAgentConfigRepo() *AgentConfigRepo { return &AgentConfigRepo{} }
+
+// ValidateAgentConfigJSON performs activation-time schema validation. An
+// invalid version must never become active and strand requests after a
+// successful pointer switch.
+func ValidateAgentConfigJSON(agentType, version, rawJSON string) error {
+	if strings.TrimSpace(version) == "" || strings.TrimSpace(agentType) == "" {
+		return fmt.Errorf("agent type and version are required")
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(rawJSON), &raw); err != nil || raw == nil {
+		return fmt.Errorf("config_json must be a JSON object")
+	}
+	if prompt, ok := raw["system_prompt"]; ok {
+		var value string
+		if err := json.Unmarshal(prompt, &value); err != nil || utf8.RuneCountInString(value) > 16000 {
+			return fmt.Errorf("system_prompt is invalid or too long")
+		}
+	}
+	if iterations, ok := raw["max_iterations"]; ok {
+		var value int
+		if err := json.Unmarshal(iterations, &value); err != nil || value < 0 || value > 100 {
+			return fmt.Errorf("max_iterations must be between 0 and 100")
+		}
+	}
+	if tools, ok := raw["tools"]; ok {
+		var values []string
+		if err := json.Unmarshal(tools, &values); err != nil || len(values) > 64 {
+			return fmt.Errorf("tools must be a bounded string list")
+		}
+		seen := make(map[string]struct{}, len(values))
+		for _, tool := range values {
+			tool = strings.TrimSpace(tool)
+			if tool == "" || len(tool) > 128 || strings.ContainsAny(tool, "\r\n") {
+				return fmt.Errorf("tools contains an invalid name")
+			}
+			if _, exists := seen[tool]; exists {
+				return fmt.Errorf("tools contains duplicate name")
+			}
+			seen[tool] = struct{}{}
+		}
+	}
+	if agentType == string(domain.AgentTypeKnowledge) {
+		if chunk, ok := raw["chunk_size"]; ok {
+			var value int
+			if err := json.Unmarshal(chunk, &value); err != nil || value < 100 || value > 2000 {
+				return fmt.Errorf("chunk_size must be between 100 and 2000")
+			}
+		}
+		if overlap, ok := raw["overlap"]; ok {
+			var value int
+			if err := json.Unmarshal(overlap, &value); err != nil || value < 0 || value > 500 {
+				return fmt.Errorf("overlap must be between 0 and 500")
+			}
+		}
+	}
+	return nil
+}
 
 type agentConfigRow struct {
 	TenantID   string `json:"tenant_id"`

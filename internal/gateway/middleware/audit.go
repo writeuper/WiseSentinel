@@ -62,6 +62,10 @@ func detachedAuditContext(parent context.Context) (context.Context, context.Canc
 
 func auditAction(path, method string) string {
 	switch {
+	case strings.HasPrefix(path, "/api/v1/admin/agent-configs") && method == "PUT":
+		return "agent_config.activate"
+	case strings.HasPrefix(path, "/api/v1/admin/agent-configs") && method == "GET":
+		return "agent_config.read"
 	case strings.HasPrefix(path, "/api/v1/admin/vector-gc") && method == httpMethodPost:
 		return "vector_gc.redrive.request"
 	case strings.HasPrefix(path, "/api/v1/admin/vector-gc") && method == httpMethodGet:

@@ -10,3 +10,12 @@ func TestAuditActionClassifiesVectorGCRedriveSeparately(t *testing.T) {
 		t.Fatalf("redrive action = %q", got)
 	}
 }
+
+func TestAuditActionRecognizesAgentConfigChanges(t *testing.T) {
+	if got := auditAction("/api/v1/admin/agent-configs/v2/activate", "PUT"); got != "agent_config.activate" {
+		t.Fatalf("activate action = %q", got)
+	}
+	if got := auditAction("/api/v1/admin/agent-configs", httpMethodGet); got != "agent_config.read" {
+		t.Fatalf("read action = %q", got)
+	}
+}

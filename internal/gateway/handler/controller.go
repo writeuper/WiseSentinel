@@ -1141,7 +1141,8 @@ func (c *ControllerV1) ActivateAgentConfig(ctx context.Context, req *v1.Activate
 	isActive := false
 	err := g.DB().Transaction(ctx, func(txCtx context.Context, tx gdb.TX) error {
 		var target struct {
-			Version string `json:"version"`
+			Version    string `json:"version"`
+			ConfigJSON string `json:"config_json"`
 		}
 		if err := tx.Model("ws_agent_config").Ctx(txCtx).
 			Where("tenant_id", tenantID).
@@ -1152,6 +1153,9 @@ func (c *ControllerV1) ActivateAgentConfig(ctx context.Context, req *v1.Activate
 		}
 		if target.Version == "" {
 			return apperr.ErrNotFound
+		}
+		if err := repository.ValidateAgentConfigJSON(req.AgentType, target.Version, target.ConfigJSON); err != nil {
+			return apperr.ErrBadRequest
 		}
 
 		if _, err := tx.Model("ws_agent_config").Ctx(txCtx).

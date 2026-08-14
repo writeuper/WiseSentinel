@@ -30,3 +30,28 @@ func TestDecodeAgentConfigRejectsUnsafeIterationBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateAgentConfigJSONRejectsUnsafeActivation(t *testing.T) {
+	tests := []string{
+		`{"max_iterations":101}`,
+		`{"tools":["query_logs","query_logs"]}`,
+		`{"system_prompt":123}`,
+		`{"chunk_size":50}`,
+	}
+	for _, raw := range tests {
+		typeName := "chat"
+		if raw == `{"chunk_size":50}` {
+			typeName = string(domain.AgentTypeKnowledge)
+		}
+		if err := ValidateAgentConfigJSON(typeName, "v-invalid", raw); err == nil {
+			t.Fatalf("unsafe config accepted: %s", raw)
+		}
+	}
+}
+
+func TestValidateAgentConfigJSONAcceptsBoundedConfig(t *testing.T) {
+	raw := `{"system_prompt":"safe","max_iterations":20,"tools":["query_logs"],"chunk_size":500,"overlap":50}`
+	if err := ValidateAgentConfigJSON(string(domain.AgentTypeKnowledge), "v1", raw); err != nil {
+		t.Fatalf("bounded config rejected: %v", err)
+	}
+}
