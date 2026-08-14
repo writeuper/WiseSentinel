@@ -125,6 +125,13 @@ func Init(ctx context.Context) (*App, error) {
 	var err error
 	if configx.String(ctx, "mcp.time.enabled", "MCP_TIME_ENABLED") == "true" {
 		mcpCtx, cancel := context.WithTimeout(ctx, mcpTimeInitTimeout(ctx))
+		capabilityPolicy := &mcpclient.CapabilityPolicy{
+			ExpectedToolNames: g.Cfg().MustGet(ctx, "mcp.time.expected_tool_names", []string{}).Strings(),
+			MaxTools:          g.Cfg().MustGet(ctx, "mcp.time.max_tools", 0).Int(),
+		}
+		if len(capabilityPolicy.ExpectedToolNames) == 0 && capabilityPolicy.MaxTools <= 0 {
+			capabilityPolicy = nil
+		}
 		mcpTimeClient, err = mcpclient.NewStdioClientWithOptions(mcpCtx,
 			g.Cfg().MustGet(ctx, "mcp.time.command").String(),
 			g.Cfg().MustGet(ctx, "mcp.time.args").Strings(),
@@ -132,6 +139,7 @@ func Init(ctx context.Context) (*App, error) {
 				AllowedCommands:      g.Cfg().MustGet(ctx, "mcp.time.allowed_commands").Strings(),
 				AllowedArgs:          g.Cfg().MustGet(ctx, "mcp.time.allowed_args").Strings(),
 				EnvironmentAllowlist: g.Cfg().MustGet(ctx, "mcp.time.environment_allowlist").Strings(),
+				CapabilityPolicy:     capabilityPolicy,
 			},
 		)
 		cancel()

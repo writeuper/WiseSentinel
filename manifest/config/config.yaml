@@ -79,6 +79,9 @@ mcp:
     allowed_commands: ["/home/ubuntu/.local/bin/uvx"]
     allowed_args: ["--with", "mcp==1.23.0", "mcp-server-time"]
     environment_allowlist: ["PATH", "HOME", "LANG", "LC_ALL", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "UV_CACHE_DIR"]
+    # Fail closed if the approved time server exposes a different tool set.
+    expected_tool_names: ["convert_time", "get_current_time"]
+    max_tools: 8
     max_response_bytes: 65536
     args: ["--with", "mcp==1.23.0", "mcp-server-time"]
   log:
