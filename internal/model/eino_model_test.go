@@ -244,6 +244,59 @@ func TestStreamObservesProviderUsageChunk(t *testing.T) {
 	t.Fatal("stream token usage metric not observed")
 }
 
+func TestStreamObservesTTFTOnFirstContentAndIgnoresUsageOnlyChunk(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		time.Sleep(15 * time.Millisecond)
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"first\"}}]}\n\n"))
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		_, _ = w.Write([]byte("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":3,\"total_tokens\":7}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	m := NewOpenAIEinoModel("test", "test-model", "key", server.URL, time.Second)
+	reader, err := m.Stream(context.Background(), []*schema.Message{{Role: schema.User, Content: "hello"}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer reader.Close()
+	for {
+		_, recvErr := reader.Recv()
+		if recvErr != nil {
+			if recvErr != io.EOF {
+				t.Fatalf("stream receive: %v", recvErr)
+			}
+			break
+		}
+	}
+
+	families, err := observability.Registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "ws_model_stream_ttft_seconds" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			labels := map[string]string{}
+			for _, label := range metric.Label {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if labels["provider"] == "other" && metric.Histogram != nil && metric.Histogram.GetSampleCount() >= 1 {
+				return
+			}
+		}
+	}
+	t.Fatal("stream TTFT metric not observed")
+}
+
 func TestBuildRequestNormalizesForcedToolChoice(t *testing.T) {
 	m := NewOpenAIEinoModel("test", "test-model", "key", "http://localhost/v1", time.Second)
 	tools := []*schema.ToolInfo{{Name: "search_logs", Desc: "search logs"}}

@@ -371,6 +371,7 @@ func (m *OpenAIEinoModel) Stream(ctx context.Context, input []*schema.Message, o
 
 	go func() {
 		streamStarted := time.Now()
+		firstTokenObserved := false
 		streamErr := error(nil)
 		defer func() {
 			observability.ObserveModelCall(m.provider, "stream_complete", modelCallOutcome(streamErr), time.Since(streamStarted).Seconds())
@@ -439,6 +440,10 @@ func (m *OpenAIEinoModel) Stream(ctx context.Context, input []*schema.Message, o
 			}
 			for _, c := range chunk.Choices {
 				if c.Delta.Content != "" {
+					if !firstTokenObserved {
+						observability.ObserveModelStreamTTFT(m.provider, time.Since(streamStarted).Seconds())
+						firstTokenObserved = true
+					}
 					fullContent.WriteString(c.Delta.Content)
 					ws.Send(&schema.Message{
 						Role:    schema.RoleType(c.Delta.Role),
@@ -447,6 +452,10 @@ func (m *OpenAIEinoModel) Stream(ctx context.Context, input []*schema.Message, o
 				}
 				// Handle streaming tool calls
 				if len(c.Delta.ToolCalls) > 0 {
+					if !firstTokenObserved {
+						observability.ObserveModelStreamTTFT(m.provider, time.Since(streamStarted).Seconds())
+						firstTokenObserved = true
+					}
 					for _, tc := range c.Delta.ToolCalls {
 						tc := tc
 						idx := 0

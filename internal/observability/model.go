@@ -58,10 +58,18 @@ var (
 		},
 		[]string{"provider", "operation", "token_type"},
 	)
+	modelStreamTTFT = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "ws_model_stream_ttft_seconds",
+			Help:    "Time to first streamed model token by bounded provider class.",
+			Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30},
+		},
+		[]string{"provider"},
+	)
 )
 
 func init() {
-	Registry.MustRegister(modelCalls, modelCallDuration, modelAdmissionInFlight, modelAdmissionRejected, modelAdmissionWait, modelBreakerEvents, modelTokens)
+	Registry.MustRegister(modelCalls, modelCallDuration, modelAdmissionInFlight, modelAdmissionRejected, modelAdmissionWait, modelBreakerEvents, modelTokens, modelStreamTTFT)
 }
 
 func ObserveModelBreakerEvent(provider, event string) {
@@ -106,6 +114,14 @@ func ObserveModelTokens(provider, operation string, prompt, completion, total in
 			modelTokens.WithLabelValues(provider, operation, tokenType).Add(float64(value))
 		}
 	}
+}
+
+// ObserveModelStreamTTFT records only non-negative first-token latency.
+func ObserveModelStreamTTFT(provider string, seconds float64) {
+	if seconds < 0 {
+		return
+	}
+	modelStreamTTFT.WithLabelValues(modelProviderClass(provider)).Observe(seconds)
 }
 
 // ObserveModelAdmission records local admission occupancy and capacity

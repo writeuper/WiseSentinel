@@ -144,3 +144,27 @@ func TestModelTokenMetricsUseBoundedLabelsAndIgnoreMissingUsage(t *testing.T) {
 	}
 	t.Fatal("bounded model token metric not found")
 }
+
+func TestModelStreamTTFTUsesBoundedProviderAndIgnoresNegativeValues(t *testing.T) {
+	ObserveModelStreamTTFT("provider-with-secret", -1)
+	ObserveModelStreamTTFT("provider-with-secret", 0.125)
+	families, err := Registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "ws_model_stream_ttft_seconds" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			labels := map[string]string{}
+			for _, label := range metric.Label {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if labels["provider"] == "other" && metric.Histogram != nil && metric.Histogram.GetSampleCount() >= 1 {
+				return
+			}
+		}
+	}
+	t.Fatal("bounded stream TTFT metric not found")
+}
