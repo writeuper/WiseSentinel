@@ -42,6 +42,7 @@ ws_rag_retrieval_duration_seconds_count{outcome="error",confidence="low"} 2
         self.assertEqual(report["success_sample_count"], 3)
         self.assertEqual(report["error_sample_count"], 2)
         self.assertEqual(report["success_p95_ms"], 250.0)
+        self.assertEqual(report["success_p99_ms"], 250.0)
         self.assertEqual(report["success_mean_ms"], 150.0)
         self.assertEqual(report["p95_semantics"], "histogram_bucket_upper_bound_ms")
 
@@ -78,6 +79,7 @@ ws_model_call_duration_seconds_count{operation="generate",outcome="timeout",prov
         self.assertEqual(report["success_sample_count"], 2)
         self.assertEqual(report["timeout_sample_count"], 1)
         self.assertEqual(report["success_p95_ms"], 5000.0)
+        self.assertEqual(report["success_p99_ms"], 5000.0)
         self.assertEqual(report["success_mean_ms"], 4000.0)
 
     def test_parse_breaker_events_is_bounded_and_aggregated(self):
@@ -255,6 +257,7 @@ ws_model_tokens_total{operation="generate",provider="secret",token_type="unknown
         self.assertEqual(report["success"]["samples"], 2)
         self.assertEqual(report["success"]["p50_ms"], 100.0)
         self.assertEqual(report["success"]["p95_ms"], 200.0)
+        self.assertEqual(report["success"]["p99_ms"], 200.0)
         self.assertEqual(report["business_terminal"]["samples"], 3)
         self.assertEqual(report["all_finished"]["samples"], 4)
 

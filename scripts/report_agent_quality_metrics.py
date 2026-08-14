@@ -112,7 +112,9 @@ def aggregate_tool_latency(rows: list[list[str]]) -> dict[str, Any]:
             "zero_latency_rate": round(sum(1 for latency in all_values if latency == 0) / len(all_values) * 100, 2) if all_values else None,
             "p50_ms": percentile_ms(all_values, 0.50),
             "p95_ms": percentile_ms(all_values, 0.95),
+            "p99_ms": percentile_ms(all_values, 0.99),
             "success_p95_ms": percentile_ms(success_values, 0.95),
+            "success_p99_ms": percentile_ms(success_values, 0.99),
         })
     attempted = sum(item["dependency_attempts"] for item in result)
     available = sum(item["outcomes"]["success"] for item in result)
@@ -314,6 +316,7 @@ def aggregate_trace_latency(rows: list[list[str]]) -> dict[str, Any]:
             "mean_ms": round(sum(values) / len(values), 3) if values else None,
             "p50_ms": percentile_ms(values, 0.50),
             "p95_ms": percentile_ms(values, 0.95),
+            "p99_ms": percentile_ms(values, 0.99),
         }
 
     return {"success": summary(success), "business_terminal": summary(business), "all_finished": summary(all_values)}
@@ -344,12 +347,12 @@ def parse_prometheus(text: str) -> dict[str, Any]:
         elif "_sum" in line:
             sums[outcome] += safe_float(line.rsplit(" ", 1)[-1])
 
-    def percentile(outcome: str) -> float | None:
+    def percentile(outcome: str, quantile: float) -> float | None:
         total = totals.get(outcome, 0.0)
         buckets = buckets_by_outcome.get(outcome, {})
         if not total or not buckets:
             return None
-        target = total * 0.95
+        target = total * quantile
         bound = next((item for item, value in sorted(buckets.items()) if value >= target), None)
         return None if bound is None or bound == float("inf") else round(bound * 1000, 3)
 
@@ -360,9 +363,12 @@ def parse_prometheus(text: str) -> dict[str, Any]:
         "sample_count": sample_count,
         "success_sample_count": success_count,
         "error_sample_count": error_count,
-        "p95_ms": percentile("success"),
-        "success_p95_ms": percentile("success"),
-        "all_p95_ms": None if sample_count == 0 else percentile("success") if error_count == 0 else None,
+        "p95_ms": percentile("success", 0.95),
+        "p99_ms": percentile("success", 0.99),
+        "success_p95_ms": percentile("success", 0.95),
+        "success_p99_ms": percentile("success", 0.99),
+        "all_p95_ms": None if sample_count == 0 else percentile("success", 0.95) if error_count == 0 else None,
+        "all_p99_ms": None if sample_count == 0 else percentile("success", 0.99) if error_count == 0 else None,
         "mean_ms": round(sum(sums.values()) / sample_count * 1000, 3) if sample_count else None,
         "success_mean_ms": round(sums.get("success", 0.0) / success_count * 1000, 3) if success_count else None,
         "p95_semantics": "histogram_bucket_upper_bound_ms" if sample_count else None,
@@ -421,11 +427,11 @@ def parse_model_prometheus(text: str) -> dict[str, Any]:
         elif "_sum" in line:
             sums[outcome] += safe_float(line.rsplit(" ", 1)[-1])
 
-    def p95(outcome: str) -> float | None:
+    def p95(outcome: str, quantile: float) -> float | None:
         total = totals.get(outcome, 0.0)
         if not total:
             return None
-        target = total * 0.95
+        target = total * quantile
         bound = next((item for item, value in sorted(buckets.get(outcome, {}).items()) if value >= target), None)
         return None if bound is None or bound == float("inf") else round(bound * 1000, 3)
 
@@ -435,7 +441,8 @@ def parse_model_prometheus(text: str) -> dict[str, Any]:
         "sample_count": int(sum(totals.values())),
         "success_sample_count": success,
         "timeout_sample_count": timeout,
-        "success_p95_ms": p95("success"),
+        "success_p95_ms": p95("success", 0.95),
+        "success_p99_ms": p95("success", 0.99),
         "success_mean_ms": round(sums.get("success", 0.0) / success * 1000, 3) if success else None,
         "p95_semantics": "histogram_bucket_upper_bound_ms" if totals else None,
     }
@@ -591,7 +598,7 @@ def fetch_metrics(url: str) -> dict[str, Any]:
         return parse_prometheus(text)
     else:
         return {"sample_count": 0, "success_sample_count": 0, "error_sample_count": 0,
-                "p95_ms": None, "success_p95_ms": None, "all_p95_ms": None,
+                "p95_ms": None, "p99_ms": None, "success_p95_ms": None, "success_p99_ms": None, "all_p95_ms": None, "all_p99_ms": None,
                 "mean_ms": None, "success_mean_ms": None, "p95_semantics": None}
 
 
@@ -816,7 +823,7 @@ def main() -> int:
         print(f"- Average Agent latency (business terminal): {report['trace']['avg_latency_ms_business_terminal']} ms")
         for label, key in (("success", "success"), ("business terminal", "business_terminal"), ("all finished", "all_finished")):
             latency = report["trace_latency"][key]
-            print(f"- Agent latency {label}: samples={latency['samples']}, p50={latency['p50_ms'] if latency['p50_ms'] is not None else 'N/A'} ms, p95={latency['p95_ms'] if latency['p95_ms'] is not None else 'N/A'} ms")
+            print(f"- Agent latency {label}: samples={latency['samples']}, p50={latency['p50_ms'] if latency['p50_ms'] is not None else 'N/A'} ms, p95={latency['p95_ms'] if latency['p95_ms'] is not None else 'N/A'} ms, p99={latency['p99_ms'] if latency['p99_ms'] is not None else 'N/A'} ms")
         print(f"- Average Agent steps/trace: {report['steps']['avg_per_trace']}")
         print(f"- Tool success rate: {report['tool_calls']['success_rate'] if report['tool_calls']['success_rate'] is not None else 'N/A'}%")
         index_tasks = report["index_tasks"]
@@ -841,7 +848,7 @@ def main() -> int:
         print(f"- Tool dependency availability: attempts={report['tool_calls']['dependency_attempts']}, available={report['tool_calls']['dependency_available']}, availability_rate={report['tool_calls']['dependency_availability_rate'] if report['tool_calls']['dependency_availability_rate'] is not None else 'N/A'}%, response_rate={report['tool_calls']['dependency_response_rate'] if report['tool_calls']['dependency_response_rate'] is not None else 'N/A'}%")
         for tool in report["tool_calls"]["by_tool"]:
             zero_note = f", zero_latency={tool['zero_latency_samples']} ({tool['zero_latency_rate']}%)" if tool["zero_latency_samples"] else ""
-            print(f"- Tool {tool['tool_name']}: calls={tool['calls']}, success_rate={tool['success_rate']}%, dependency_availability={tool['dependency_availability_rate'] if tool['dependency_availability_rate'] is not None else 'N/A'}%, response_rate={tool['dependency_response_rate'] if tool['dependency_response_rate'] is not None else 'N/A'}%, unavailable_rate={tool['unavailable_rate'] if tool['unavailable_rate'] is not None else 'N/A'}%, timeout_rate={tool['timeout_rate'] if tool['timeout_rate'] is not None else 'N/A'}%, p50={tool['p50_ms']} ms, p95={tool['p95_ms']} ms, success_p95={tool['success_p95_ms']} ms{zero_note}")
+            print(f"- Tool {tool['tool_name']}: calls={tool['calls']}, success_rate={tool['success_rate']}%, dependency_availability={tool['dependency_availability_rate'] if tool['dependency_availability_rate'] is not None else 'N/A'}%, response_rate={tool['dependency_response_rate'] if tool['dependency_response_rate'] is not None else 'N/A'}%, unavailable_rate={tool['unavailable_rate'] if tool['unavailable_rate'] is not None else 'N/A'}%, timeout_rate={tool['timeout_rate'] if tool['timeout_rate'] is not None else 'N/A'}%, p50={tool['p50_ms']} ms, p95={tool['p95_ms']} ms, p99={tool['p99_ms']} ms, success_p95={tool['success_p95_ms']} ms, success_p99={tool['success_p99_ms']} ms{zero_note}")
         rag = report["rag_retrieval"]
         inventory = report["rag_inventory"]
         print(f"- RAG inventory: active_documents={inventory['active_documents'] if inventory['active_documents'] is not None else 'N/A'}, published_chunks={inventory['active_published_chunks'] if inventory['active_published_chunks'] is not None else 'N/A'}, legacy_documents={inventory['active_legacy_documents'] if inventory['active_legacy_documents'] is not None else 'N/A'}, physical_vectors={inventory['physical_vectors'] if inventory['physical_vectors'] is not None else 'N/A'}")
@@ -849,6 +856,7 @@ def main() -> int:
         print(f"- RAG successful samples: {rag.get('success_sample_count', 0)}")
         print(f"- RAG error samples: {rag.get('error_sample_count', 0)}")
         print(f"- RAG successful retrieval P95: {rag.get('success_p95_ms') if rag.get('success_p95_ms') is not None else 'N/A'} ms")
+        print(f"- RAG successful retrieval P99: {rag.get('p99_ms') if rag.get('p99_ms') is not None else 'N/A'} ms")
         print(f"- RAG successful retrieval mean: {rag.get('success_mean_ms') if rag.get('success_mean_ms') is not None else 'N/A'} ms")
         if rag.get("p95_semantics"):
             print("- RAG P95 semantics: histogram bucket upper bound (not an exact percentile)")
@@ -862,6 +870,7 @@ def main() -> int:
         print(f"- Model generation success samples: {model['success_sample_count']}")
         print(f"- Model generation timeout samples: {model['timeout_sample_count']}")
         print(f"- Model generation successful P95: {model['success_p95_ms'] if model['success_p95_ms'] is not None else 'N/A'} ms")
+        print(f"- Model generation successful P99: {model['success_p99_ms'] if model['success_p99_ms'] is not None else 'N/A'} ms")
         print(f"- Model generation successful mean: {model['success_mean_ms'] if model['success_mean_ms'] is not None else 'N/A'} ms")
         cost = report["model_cost"]
         if cost.get("status") == "estimated":
