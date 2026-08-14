@@ -22,6 +22,7 @@ from typing import Any
 
 TRAFFIC_STATUSES = {"synthetic", "staging", "production_attested"}
 TRAFFIC_SOURCES = {"gateway_aggregate", "analytics_aggregate", "load_test"}
+BUSINESS_OUTCOME_SOURCES = {"product_analytics", "workflow_audit", "load_test"}
 TOOL_OUTCOMES = {"success", "error", "rejected", "unavailable", "timeout"}
 
 
@@ -710,7 +711,73 @@ def load_traffic_attestation(path: str | None) -> dict[str, Any]:
     }
 
 
-def aggregate(traffic_attestation_path: str | None = None, pricing_profile_path: str | None = None, slo_profile_path: str | None = None) -> dict[str, Any]:
+def load_business_outcome_attestation(path: str | None) -> dict[str, Any]:
+    """Load aggregate business-result evidence without accepting raw events.
+
+    Technical trace success is not equivalent to a business task succeeding.
+    This optional artifact is supplied by an analytics or workflow system and
+    contains only bounded counts plus a signed/fingerprinted provenance marker.
+    """
+    base = {"status": "not_claimed", "source": "no_business_outcome_attestation_configured"}
+    if not path:
+        return base
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {"status": "invalid", "source": "business_outcome_attestation_unreadable"}
+    if not isinstance(payload, dict):
+        return {"status": "invalid", "source": "business_outcome_attestation_not_object"}
+    status = str(payload.get("status") or "").strip().lower()
+    source = str(payload.get("source") or "").strip().lower()
+    if status not in TRAFFIC_STATUSES or source not in BUSINESS_OUTCOME_SOURCES:
+        return {"status": "invalid", "source": "business_outcome_attestation_enum_invalid"}
+    if status == "production_attested" and not re.fullmatch(
+        r"[0-9a-f]{64}", str(payload.get("attestation_fingerprint") or "").lower()
+    ):
+        return {"status": "invalid", "source": "business_outcome_attestation_fingerprint_invalid"}
+    try:
+        task_count = int(payload.get("task_count"))
+        success_count = int(payload.get("success_count"))
+        failure_count = int(payload.get("failure_count"))
+        unknown_count = int(payload.get("unknown_count", 0))
+        user_count = int(payload.get("user_count"))
+        tenant_count = int(payload.get("tenant_count"))
+    except (TypeError, ValueError):
+        return {"status": "invalid", "source": "business_outcome_attestation_count_invalid"}
+    counts = (task_count, success_count, failure_count, unknown_count, user_count, tenant_count)
+    if min(counts) < 0 or success_count + failure_count + unknown_count != task_count:
+        return {"status": "invalid", "source": "business_outcome_attestation_count_out_of_range"}
+    if user_count > task_count or tenant_count > task_count:
+        return {"status": "invalid", "source": "business_outcome_attestation_count_out_of_range"}
+    window_start = str(payload.get("window_start") or "").strip()
+    window_end = str(payload.get("window_end") or "").strip()
+    try:
+        start = datetime.fromisoformat(window_start.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(window_end.replace("Z", "+00:00"))
+        if start.tzinfo is None or end.tzinfo is None or end <= start:
+            raise ValueError
+    except ValueError:
+        return {"status": "invalid", "source": "business_outcome_attestation_window_invalid"}
+    terminal = success_count + failure_count
+    return {
+        "status": status,
+        "source": source,
+        "window_start": window_start,
+        "window_end": window_end,
+        "task_count": task_count,
+        "success_count": success_count,
+        "failure_count": failure_count,
+        "unknown_count": unknown_count,
+        "terminal_count": terminal,
+        "success_rate": round(success_count / terminal, 6) if terminal else None,
+        "user_count": user_count,
+        "tenant_count": tenant_count,
+        "attested": status == "production_attested",
+    }
+
+
+def aggregate(traffic_attestation_path: str | None = None, pricing_profile_path: str | None = None, slo_profile_path: str | None = None, business_outcome_attestation_path: str | None = None) -> dict[str, Any]:
     # A non-null finished_at is the durable terminal marker. `abandoned` is a
     # recovery/observability terminal state, not a business execution failure;
     # report it separately so stale-process cleanup cannot inflate failure rate.
@@ -849,6 +916,7 @@ def aggregate(traffic_attestation_path: str | None = None, pricing_profile_path:
         "feedback": aggregate_feedback(feedback_rows),
         "feedback_recent_24h": aggregate_feedback(feedback_recent_rows),
         "traffic_evidence": load_traffic_attestation(traffic_attestation_path or os.environ.get("TRAFFIC_ATTESTATION_FILE", "")),
+        "business_outcome_evidence": load_business_outcome_attestation(business_outcome_attestation_path or os.environ.get("BUSINESS_OUTCOME_ATTESTATION_FILE", "")),
         "rag_retrieval": parse_prometheus(metrics_text) if metrics_text else fetch_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics")),
         "rag_inventory": parse_rag_inventory(metrics_text),
         "model_generation": parse_model_prometheus(metrics_text),
@@ -869,9 +937,10 @@ def main() -> int:
     parser.add_argument("--traffic-attestation", default="", help="Path to an anonymous, validated traffic attestation JSON artifact.")
     parser.add_argument("--pricing-profile", default="", help="Path to an external, versioned USD model pricing profile.")
     parser.add_argument("--slo-profile", default="", help="Path to an external, versioned Agent SLO target profile.")
+    parser.add_argument("--business-outcome-attestation", default="", help="Path to an anonymous aggregate business-result attestation JSON artifact.")
     args = parser.parse_args()
     try:
-        report = aggregate(args.traffic_attestation, args.pricing_profile, args.slo_profile)
+      report = aggregate(args.traffic_attestation, args.pricing_profile, args.slo_profile, args.business_outcome_attestation)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -909,6 +978,8 @@ def main() -> int:
         recent_feedback = report["feedback_recent_24h"]
         print(f"- User feedback (last 24h): total={recent_feedback['total']}, rated={recent_feedback['rated']}, useful={recent_feedback['useful']}, bad={recent_feedback['bad']}, useful_rate={recent_feedback['useful_rate'] if recent_feedback['useful_rate'] is not None else 'N/A'}%")
         print(f"- Production traffic evidence: {report['traffic_evidence']['status']} ({report['traffic_evidence']['source']})")
+        business = report["business_outcome_evidence"]
+        print(f"- Business outcome evidence: {business['status']} ({business['source']}), terminal={business.get('terminal_count', 'N/A')}, success_rate={business.get('success_rate', 'N/A')}")
         print(f"- Tool dependency availability: attempts={report['tool_calls']['dependency_attempts']}, available={report['tool_calls']['dependency_available']}, availability_rate={report['tool_calls']['dependency_availability_rate'] if report['tool_calls']['dependency_availability_rate'] is not None else 'N/A'}%, response_rate={report['tool_calls']['dependency_response_rate'] if report['tool_calls']['dependency_response_rate'] is not None else 'N/A'}%")
         for tool in report["tool_calls"]["by_tool"]:
             zero_note = f", zero_latency={tool['zero_latency_samples']} ({tool['zero_latency_rate']}%)" if tool["zero_latency_samples"] else ""

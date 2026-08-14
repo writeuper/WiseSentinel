@@ -328,6 +328,40 @@ ws_model_tokens_total{operation="generate",provider="secret",token_type="unknown
                 path.write_text(json.dumps(payload), encoding="utf-8")
                 self.assertEqual(MODULE.load_traffic_attestation(str(path))["status"], "invalid")
 
+    def test_business_outcome_attestation_is_not_claimed_without_artifact(self):
+        report = MODULE.load_business_outcome_attestation("")
+        self.assertEqual(report["status"], "not_claimed")
+        self.assertNotIn("success_rate", report)
+
+    def test_valid_business_outcome_attestation_is_aggregate_only(self):
+        payload = {
+            "status": "production_attested", "source": "workflow_audit",
+            "window_start": "2026-08-14T00:00:00Z", "window_end": "2026-08-14T01:00:00Z",
+            "task_count": 100, "success_count": 90, "failure_count": 5, "unknown_count": 5,
+            "user_count": 20, "tenant_count": 4, "attestation_fingerprint": "b" * 64,
+            "raw_task_ids": ["must-not-leak"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "business.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            report = MODULE.load_business_outcome_attestation(str(path))
+        self.assertTrue(report["attested"])
+        self.assertEqual(report["terminal_count"], 95)
+        self.assertEqual(report["success_rate"], round(90 / 95, 6))
+        self.assertNotIn("raw_task_ids", report)
+
+    def test_business_outcome_attestation_rejects_count_mismatch(self):
+        payload = {
+            "status": "staging", "source": "load_test",
+            "window_start": "2026-08-14T00:00:00Z", "window_end": "2026-08-14T01:00:00Z",
+            "task_count": 2, "success_count": 2, "failure_count": 1, "unknown_count": 0,
+            "user_count": 1, "tenant_count": 1,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "business-invalid.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            self.assertEqual(MODULE.load_business_outcome_attestation(str(path))["status"], "invalid")
+
 
 if __name__ == "__main__":
     unittest.main()

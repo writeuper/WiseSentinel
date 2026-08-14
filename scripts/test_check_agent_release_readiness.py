@@ -23,7 +23,11 @@ def evaluation(**overrides):
 
 
 def quality(**overrides):
-    value = {"traffic_evidence": {"status": "production_attested"}, "slo": {"status": "within_budget"}}
+    value = {
+        "traffic_evidence": {"status": "production_attested"},
+        "slo": {"status": "within_budget"},
+        "business_outcome_evidence": {"status": "production_attested", "terminal_count": 100, "success_rate": 0.95},
+    }
     value.update(overrides)
     return value
 
@@ -51,6 +55,19 @@ class ReleaseReadinessTests(unittest.TestCase):
         result = MODULE.evaluate(None, evaluation(), quality())
         self.assertEqual(result["status"], "not_ready")
         self.assertIn("eval_coverage", result["blockers"])
+
+    def test_business_outcomes_are_required_only_when_explicitly_enabled(self):
+        missing = quality(business_outcome_evidence={"status": "not_claimed"})
+        optional = MODULE.evaluate(coverage(), evaluation(), missing)
+        self.assertEqual(optional["status"], "ready")
+        required = MODULE.evaluate(coverage(), evaluation(), missing, require_business_outcomes=True)
+        self.assertEqual(required["status"], "not_ready")
+        self.assertIn("business_outcomes", required["blockers"])
+
+    def test_business_outcome_rate_threshold_is_enforced(self):
+        result = MODULE.evaluate(coverage(), evaluation(), quality(), require_business_outcomes=True, minimum_business_outcome_rate=0.99)
+        self.assertEqual(result["status"], "not_ready")
+        self.assertIn("business_outcomes", result["blockers"])
 
 
 if __name__ == "__main__":
