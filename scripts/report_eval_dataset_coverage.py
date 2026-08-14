@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import sys
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +85,8 @@ def main() -> int:
     args = parser.parse_args()
     try:
         report = analyze_cases(read_cases(args.input), max(1, args.minimum_cases))
+        report["generated_at"] = datetime.now(timezone.utc).isoformat()
+        report["dataset_sha256"] = hashlib.sha256(args.input.read_bytes()).hexdigest()
     except (OSError, csv.Error) as exc:
         print("coverage analysis failed", file=sys.stderr)
         return 2
@@ -91,6 +95,8 @@ def main() -> int:
     else:
         print("# Agent Evaluation Dataset Coverage\n")
         print(f"- Cases: {report['total_cases']} (gate={report['case_count_gate']})")
+        print(f"- Dataset SHA-256: {report['dataset_sha256']}")
+        print(f"- Generated at: {report['generated_at']}")
         print(f"- Scenes: {report['scenes']}")
         print(f"- Routes: {report['routes']}")
         print(f"- Assertion cases: {report['assertion_cases']} ({report['assertion_case_rate']}%)")

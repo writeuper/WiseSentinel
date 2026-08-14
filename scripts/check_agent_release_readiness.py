@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,27 @@ def check(name: str, passed: bool, reason: str) -> dict[str, Any]:
     return {"name": name, "status": "pass" if passed else "fail", "reason": reason}
 
 
+def artifact_timestamp(artifact: dict[str, Any] | None, evaluation: bool = False) -> str | None:
+    if not artifact:
+        return None
+    if evaluation:
+        metadata = artifact.get("evaluation_metadata") or {}
+        if isinstance(metadata, dict) and metadata.get("generated_at"):
+            return str(metadata.get("generated_at"))
+    value = artifact.get("generated_at")
+    return str(value) if value else None
+
+
+def parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else None
+
+
 def evaluate(
     coverage: dict[str, Any] | None,
     evaluation: dict[str, Any] | None,
@@ -37,6 +59,9 @@ def evaluate(
     require_production: bool = False,
     require_slo: bool = False,
     require_business_outcomes: bool = False,
+    require_provenance: bool = False,
+    max_artifact_age_hours: float | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     if coverage is None:
@@ -71,6 +96,35 @@ def evaluate(
         )
         reason = f"status={outcomes.get('status')!r}, success_rate={outcome_rate!r}, minimum={minimum_business_outcome_rate}"
         checks.append(check("business_outcomes", outcome_ok, reason)) if require_business_outcomes else checks.append({"name": "business_outcomes", "status": "info", "reason": reason + "; business outcome requirement disabled"})
+    provenance_required = require_provenance or max_artifact_age_hours is not None
+    if provenance_required:
+        coverage_hash = coverage.get("dataset_sha256") if coverage else None
+        evaluation_metadata = (evaluation or {}).get("evaluation_metadata") if evaluation else None
+        evaluation_hash = evaluation_metadata.get("dataset_sha256") if isinstance(evaluation_metadata, dict) else None
+        timestamps = {
+            "coverage": artifact_timestamp(coverage),
+            "evaluation": artifact_timestamp(evaluation, evaluation=True),
+            "quality": artifact_timestamp(quality),
+        }
+        provenance_ok = all(
+            isinstance(artifact_hash, str) and artifact_hash and artifact_hash != "unavailable"
+            for artifact_hash in (coverage_hash, evaluation_hash)
+        ) and isinstance(evaluation_metadata, dict) and bool(evaluation_metadata.get("git_commit")) and all(timestamps.values())
+        checks.append(check("evidence_provenance", provenance_ok, f"coverage_hash={bool(coverage_hash)}, evaluation_hash={bool(evaluation_hash)}, timestamps={sum(bool(value) for value in timestamps.values())}/3")) if require_provenance else checks.append({"name": "evidence_provenance", "status": "info", "reason": "provenance requirement disabled"})
+        consistency_ok = bool(coverage_hash and evaluation_hash and coverage_hash == evaluation_hash)
+        checks.append(check("dataset_consistency", consistency_ok, f"coverage_hash_matches_evaluation={consistency_ok}")) if require_provenance else checks.append({"name": "dataset_consistency", "status": "info", "reason": "provenance requirement disabled"})
+        if max_artifact_age_hours is not None:
+            reference = now or datetime.now(timezone.utc)
+            age_errors: list[str] = []
+            for name, value in timestamps.items():
+                parsed = parse_timestamp(value)
+                if parsed is None:
+                    age_errors.append(f"{name}:invalid_timestamp")
+                    continue
+                age_hours = (reference - parsed).total_seconds() / 3600
+                if age_hours < -0.01 or age_hours > max_artifact_age_hours:
+                    age_errors.append(f"{name}:{round(age_hours, 3)}h")
+            checks.append(check("evidence_freshness", not age_errors, f"max_age_hours={max_artifact_age_hours}, errors={age_errors}"))
     blockers = [item for item in checks if item["status"] == "fail"]
     return {"status": "ready" if not blockers else "not_ready", "checks": checks, "blockers": [item["name"] for item in blockers]}
 
@@ -87,8 +141,12 @@ def main() -> int:
     parser.add_argument("--require-production", action="store_true")
     parser.add_argument("--require-slo", action="store_true")
     parser.add_argument("--require-business-outcomes", action="store_true")
+    parser.add_argument("--require-provenance", action="store_true")
+    parser.add_argument("--max-artifact-age-hours", type=float)
     args = parser.parse_args()
-    result = evaluate(load_json(args.coverage), load_json(args.evaluation), load_json(args.quality), minimum_cases=max(1, args.minimum_cases), minimum_verified_rag=max(0, args.minimum_verified_rag), minimum_business_pass_rate=max(0.0, min(1.0, args.minimum_business_pass_rate)), minimum_business_outcome_rate=max(0.0, min(1.0, args.minimum_business_outcome_rate)), require_production=args.require_production, require_slo=args.require_slo, require_business_outcomes=args.require_business_outcomes)
+    if args.max_artifact_age_hours is not None and args.max_artifact_age_hours <= 0:
+        parser.error("--max-artifact-age-hours must be positive")
+    result = evaluate(load_json(args.coverage), load_json(args.evaluation), load_json(args.quality), minimum_cases=max(1, args.minimum_cases), minimum_verified_rag=max(0, args.minimum_verified_rag), minimum_business_pass_rate=max(0.0, min(1.0, args.minimum_business_pass_rate)), minimum_business_outcome_rate=max(0.0, min(1.0, args.minimum_business_outcome_rate)), require_production=args.require_production, require_slo=args.require_slo, require_business_outcomes=args.require_business_outcomes, require_provenance=args.require_provenance, max_artifact_age_hours=args.max_artifact_age_hours)
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if result["status"] == "ready" else 1
 

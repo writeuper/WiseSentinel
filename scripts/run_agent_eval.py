@@ -422,6 +422,7 @@ def evaluation_metadata(input_path: Path, args: argparse.Namespace, authenticate
         commit = "unknown"
     tenant_fingerprint = hashlib.sha256(authenticated_tenant.encode("utf-8")).hexdigest()[:12] if authenticated_tenant else "unknown"
     return {
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "environment": args.environment,
         "run_label": args.run_label,
         "model_profile": args.model_profile,

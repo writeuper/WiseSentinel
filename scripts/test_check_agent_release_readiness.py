@@ -1,5 +1,6 @@
 import importlib.util
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -29,6 +30,25 @@ def quality(**overrides):
         "business_outcome_evidence": {"status": "production_attested", "terminal_count": 100, "success_rate": 0.95},
     }
     value.update(overrides)
+    return value
+
+
+def provenance_coverage():
+    value = coverage(dataset_sha256="a" * 64, generated_at="2026-08-14T00:00:00Z")
+    return value
+
+
+def provenance_evaluation():
+    value = evaluation(evaluation_metadata={
+        "dataset_sha256": "a" * 64,
+        "git_commit": "abc123",
+        "generated_at": "2026-08-14T00:30:00Z",
+    })
+    return value
+
+
+def provenance_quality():
+    value = quality(generated_at="2026-08-14T00:45:00Z")
     return value
 
 
@@ -68,6 +88,31 @@ class ReleaseReadinessTests(unittest.TestCase):
         result = MODULE.evaluate(coverage(), evaluation(), quality(), require_business_outcomes=True, minimum_business_outcome_rate=0.99)
         self.assertEqual(result["status"], "not_ready")
         self.assertIn("business_outcomes", result["blockers"])
+
+    def test_provenance_requires_matching_dataset_and_fresh_artifacts(self):
+        result = MODULE.evaluate(
+            provenance_coverage(), provenance_evaluation(), provenance_quality(),
+            require_provenance=True, max_artifact_age_hours=2,
+            now=datetime(2026, 8, 14, 1, 30, tzinfo=timezone.utc),
+        )
+        self.assertEqual(result["status"], "ready")
+        self.assertNotIn("evidence_provenance", result["blockers"])
+        self.assertNotIn("dataset_consistency", result["blockers"])
+        self.assertNotIn("evidence_freshness", result["blockers"])
+
+    def test_provenance_rejects_dataset_mismatch_and_stale_artifact(self):
+        evaluation_data = provenance_evaluation()
+        evaluation_data["evaluation_metadata"]["dataset_sha256"] = "b" * 64
+        coverage_data = provenance_coverage()
+        coverage_data["generated_at"] = "2026-08-10T00:00:00Z"
+        result = MODULE.evaluate(
+            coverage_data, evaluation_data, provenance_quality(),
+            require_provenance=True, max_artifact_age_hours=2,
+            now=datetime(2026, 8, 14, 1, 30, tzinfo=timezone.utc),
+        )
+        self.assertEqual(result["status"], "not_ready")
+        self.assertIn("dataset_consistency", result["blockers"])
+        self.assertIn("evidence_freshness", result["blockers"])
 
 
 if __name__ == "__main__":

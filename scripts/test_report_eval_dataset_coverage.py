@@ -23,6 +23,12 @@ class EvalDatasetCoverageTests(unittest.TestCase):
         self.assertEqual(report["relevance_verified_cases"], 1)
         self.assertEqual(report["tool_coverage"]["query_internal_docs"], 1)
 
+    def test_coverage_artifact_can_carry_provenance_fields(self):
+        report = MODULE.analyze_cases([], minimum_cases=0)
+        report["generated_at"] = "2026-08-14T00:00:00Z"
+        report["dataset_sha256"] = "a" * 64
+        self.assertEqual(len(report["dataset_sha256"]), 64)
+
     def test_coverage_fails_structural_and_size_gates(self):
         report = MODULE.analyze_cases([
             {"case_id": "A", "scene": "", "input": "", "expected_route": "", "expected_tools": "", "forbidden_tools": "", "expected_keywords": "", "relevant_doc_ids": "", "relevance_label_status": "", "relevance_label_source": ""},
