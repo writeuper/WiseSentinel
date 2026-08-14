@@ -309,6 +309,17 @@ def build_rag_ranking_metrics(rows: List[Dict[str, str]]) -> Dict[str, Any]:
     return {"sample_count": len(samples), **{key: round(sum(float(item[key] or 0.0) for item in samples) / len(samples), 6) for key in keys}}
 
 
+def wilson_interval(successes: int, total: int, z: float = 1.96) -> Tuple[float | None, float | None]:
+    """Return a 95% Wilson interval for a binomial rate."""
+    if total <= 0 or successes < 0 or successes > total:
+        return None, None
+    proportion = successes / total
+    denominator = 1 + z * z / total
+    center = (proportion + z * z / (2 * total)) / denominator
+    margin = z * math.sqrt((proportion * (1 - proportion) + z * z / (4 * total)) / total) / denominator
+    return round(max(0.0, center - margin), 6), round(min(1.0, center + margin), 6)
+
+
 def has_knowledge_workflow_evidence(answer: str, citations: Any) -> bool:
     evidence = answer + "\n" + normalize_text(citations)
     return "上传索引流程" in evidence or "query_internal_docs" in evidence
@@ -581,9 +592,11 @@ def build_metrics(rows: List[Dict[str, str]]) -> Dict[str, Any]:
         "executed_cases": len(executable),
         "passed_cases": len(passed),
         "overall_pass_rate": len(passed) / len(executable) if executable else None,
+        "overall_pass_ci95": wilson_interval(len(passed), len(executable)),
         "business_cases": len(business_rows),
         "business_passed_cases": len(business_passed),
         "business_pass_rate": len(business_passed) / len(business_rows) if business_rows else None,
+        "business_pass_ci95": wilson_interval(len(business_passed), len(business_rows)),
         "infrastructure_failure_cases": len(executable) - len(business_rows),
         "infrastructure_failure_rate": (len(executable) - len(business_rows)) / len(executable) if executable else None,
         "route_accuracy": len(route_ok) / len(executable) if executable else None,
@@ -618,7 +631,9 @@ def print_metrics(metrics: Dict[str, Any]) -> None:
     print(f"total cases: {metrics['total_cases']}")
     print(f"executed cases: {metrics['executed_cases']}")
     print(f"overall pass rate: {pct(metrics['overall_pass_rate'])} ({metrics['passed_cases']}/{metrics['executed_cases']})")
+    print(f"overall pass 95% CI: {metrics['overall_pass_ci95']}")
     print(f"business pass rate: {pct(metrics['business_pass_rate'])} ({metrics['business_passed_cases']}/{metrics['business_cases']})")
+    print(f"business pass 95% CI: {metrics['business_pass_ci95']}")
     print(f"infrastructure failures: {pct(metrics['infrastructure_failure_rate'])} ({metrics['infrastructure_failure_cases']}/{metrics['executed_cases']})")
     print(f"route accuracy: {pct(metrics['route_accuracy'])}")
     print(f"business route accuracy: {pct(metrics['business_route_accuracy'])}")

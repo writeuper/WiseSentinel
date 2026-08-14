@@ -11,6 +11,20 @@ SPEC.loader.exec_module(MODULE)
 
 
 class EvalSessionCleanupTests(unittest.TestCase):
+    def test_wilson_interval_reflects_small_sample_uncertainty(self) -> None:
+        lower, upper = MODULE.wilson_interval(1, 1)
+        self.assertLess(lower, 1.0)
+        self.assertEqual(upper, 1.0)
+        self.assertEqual(MODULE.wilson_interval(0, 0), (None, None))
+
+    def test_metrics_include_confidence_intervals(self) -> None:
+        metrics = MODULE.build_metrics([
+            {"actual_route": "chat", "expected_route": "chat", "passed": "Y", "bad_case": ""},
+            {"actual_route": "chat", "expected_route": "chat", "passed": "N", "bad_case": "keyword_miss"},
+        ])
+        self.assertEqual(metrics["overall_pass_ci95"], metrics["business_pass_ci95"])
+        self.assertEqual(len(metrics["overall_pass_ci95"]), 2)
+
     def test_ranking_metrics_calculate_recall_mrr_and_ndcg(self) -> None:
         metrics = MODULE.ranking_metrics("doc-a|doc-b", "doc-x|doc-b|doc-a")
         self.assertEqual(metrics["recall_at_1"], 0.0)
