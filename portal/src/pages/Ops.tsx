@@ -281,15 +281,16 @@ export default function OpsPage() {
             <Switch aria-label="异步模式" checked={asyncMode} onChange={setAsyncMode} />{' '}
             <span style={{ marginLeft: 8 }}>异步模式</span>
           </div>
-          <Typography.Text type="secondary">Max Iterations</Typography.Text>
-          <Slider
-            aria-label="最大 Agent 执行步数"
-            value={maxIter}
-            min={5}
-            max={30}
-            onChange={(v) => setMaxIter(v as number)}
-            style={{ marginBottom: 16 }}
-          />
+          <div role="group" aria-label="最大 Agent 执行步数">
+            <Typography.Text type="secondary">Max Iterations</Typography.Text>
+            <Slider
+              value={maxIter}
+              min={5}
+              max={30}
+              onChange={(v) => setMaxIter(v as number)}
+              style={{ marginBottom: 16 }}
+            />
+          </div>
           <Button
             type="primary"
             icon={<PlayCircleOutlined />}
