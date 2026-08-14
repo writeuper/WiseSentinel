@@ -8,7 +8,9 @@ It works with the local Docker MySQL service without requiring a host mysql CLI.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -486,6 +488,66 @@ def parse_model_tokens(text: str) -> dict[str, Any]:
     }
 
 
+def load_pricing_profile(path: str) -> dict[str, Any]:
+    """Load a validated, external pricing profile without exposing its path."""
+    if not path:
+        return {"status": "not_claimed", "reason": "no_pricing_profile_configured"}
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+        payload = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {"status": "invalid", "reason": "pricing_profile_unreadable"}
+    if not isinstance(payload, dict):
+        return {"status": "invalid", "reason": "pricing_profile_schema"}
+    profile = str(payload.get("profile") or "").strip()
+    currency = str(payload.get("currency") or "").strip().upper()
+    try:
+        prompt = float(payload.get("prompt_usd_per_1k"))
+        completion = float(payload.get("completion_usd_per_1k"))
+    except (TypeError, ValueError):
+        return {"status": "invalid", "reason": "pricing_profile_rates"}
+    if not profile or len(profile) > 128 or not re.fullmatch(r"[A-Za-z0-9._:-]+", profile):
+        return {"status": "invalid", "reason": "pricing_profile_name"}
+    if currency != "USD" or not all(math.isfinite(value) and value >= 0 for value in (prompt, completion)):
+        return {"status": "invalid", "reason": "pricing_profile_rates"}
+    return {
+        "status": "valid",
+        "profile": profile,
+        "currency": currency,
+        "prompt_usd_per_1k": prompt,
+        "completion_usd_per_1k": completion,
+        "pricing_fingerprint": hashlib.sha256(raw).hexdigest(),
+    }
+
+
+def estimate_model_cost(tokens: dict[str, Any], pricing: dict[str, Any], generation_samples: int | None = None) -> dict[str, Any]:
+    """Estimate USD cost only from validated prices and observed token counts."""
+    if pricing.get("status") != "valid":
+        return {"status": pricing.get("status", "not_claimed"), "reason": pricing.get("reason", "pricing_unavailable")}
+    prompt_tokens = max(0, safe_int(str(tokens.get("prompt_tokens", 0))))
+    completion_tokens = max(0, safe_int(str(tokens.get("completion_tokens", 0))))
+    prompt_cost = prompt_tokens / 1000 * float(pricing["prompt_usd_per_1k"])
+    completion_cost = completion_tokens / 1000 * float(pricing["completion_usd_per_1k"])
+    total = prompt_cost + completion_cost
+    samples = max(0, int(generation_samples or 0))
+    return {
+        "status": "estimated",
+        "currency": pricing["currency"],
+        "profile": pricing["profile"],
+        "pricing_fingerprint": pricing["pricing_fingerprint"],
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "prompt_cost": round(prompt_cost, 8),
+        "completion_cost": round(completion_cost, 8),
+        "total_cost": round(total, 8),
+        "prompt_share": round(prompt_cost / total * 100, 3) if total else None,
+        "completion_share": round(completion_cost / total * 100, 3) if total else None,
+        "generation_samples": samples,
+        "avg_cost_per_generation": round(total / samples, 8) if samples else None,
+    }
+
+
 def fetch_raw_metrics(url: str) -> str:
     try:
         with urllib.request.urlopen(url, timeout=10) as response:
@@ -551,7 +613,7 @@ def load_traffic_attestation(path: str | None) -> dict[str, Any]:
     }
 
 
-def aggregate(traffic_attestation_path: str | None = None) -> dict[str, Any]:
+def aggregate(traffic_attestation_path: str | None = None, pricing_profile_path: str | None = None) -> dict[str, Any]:
     # A non-null finished_at is the durable terminal marker. `abandoned` is a
     # recovery/observability terminal state, not a business execution failure;
     # report it separately so stale-process cleanup cannot inflate failure rate.
@@ -686,6 +748,8 @@ def aggregate(traffic_attestation_path: str | None = None) -> dict[str, Any]:
         "model_admission": parse_model_admission(metrics_text),
         "model_tokens": parse_model_tokens(metrics_text),
     }
+    pricing = load_pricing_profile(pricing_profile_path or os.environ.get("MODEL_PRICING_PROFILE_FILE", ""))
+    result["model_cost"] = estimate_model_cost(result["model_tokens"], pricing, result["model_generation"].get("sample_count"))
     return result
 
 
@@ -693,9 +757,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--format", choices=("json", "markdown"), default="json")
     parser.add_argument("--traffic-attestation", default="", help="Path to an anonymous, validated traffic attestation JSON artifact.")
+    parser.add_argument("--pricing-profile", default="", help="Path to an external, versioned USD model pricing profile.")
     args = parser.parse_args()
     try:
-        report = aggregate(args.traffic_attestation)
+        report = aggregate(args.traffic_attestation, args.pricing_profile)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -754,6 +819,11 @@ def main() -> int:
         print(f"- Model generation timeout samples: {model['timeout_sample_count']}")
         print(f"- Model generation successful P95: {model['success_p95_ms'] if model['success_p95_ms'] is not None else 'N/A'} ms")
         print(f"- Model generation successful mean: {model['success_mean_ms'] if model['success_mean_ms'] is not None else 'N/A'} ms")
+        cost = report["model_cost"]
+        if cost.get("status") == "estimated":
+            print(f"- Model cost estimate: {cost['total_cost']} {cost['currency']} (prompt={cost['prompt_cost']}, completion={cost['completion_cost']}, avg/generation={cost['avg_cost_per_generation'] if cost['avg_cost_per_generation'] is not None else 'N/A'}, profile={cost['profile']})")
+        else:
+            print(f"- Model cost estimate: N/A ({cost.get('reason', cost.get('status', 'unavailable'))})")
         if rag["sample_count"] < 30 or rag.get("success_sample_count", 0) < 30:
             print("\n> RAG P95 is provisional when fewer than 30 total and successful retrieval samples exist; this is not a production SLA.")
     return 0

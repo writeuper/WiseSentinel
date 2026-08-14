@@ -125,6 +125,31 @@ ws_model_tokens_total{operation="generate",provider="secret",token_type="unknown
         self.assertEqual(report["input_output_ratio"], 2.5)
         self.assertEqual(report["usage_samples"], 1)
 
+    def test_pricing_profile_is_fail_closed_when_missing_or_invalid(self):
+        self.assertEqual(MODULE.load_pricing_profile("")["status"], "not_claimed")
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "pricing.json"
+            path.write_text(json.dumps({"profile": "bad profile", "currency": "USD", "prompt_usd_per_1k": 1, "completion_usd_per_1k": 2}), encoding="utf-8")
+            self.assertEqual(MODULE.load_pricing_profile(str(path))["status"], "invalid")
+
+    def test_model_cost_estimate_uses_prompt_and_completion_rates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "pricing.json"
+            path.write_text(json.dumps({"profile": "model-v1", "currency": "USD", "prompt_usd_per_1k": 1.5, "completion_usd_per_1k": 3.0}), encoding="utf-8")
+            pricing = MODULE.load_pricing_profile(str(path))
+        cost = MODULE.estimate_model_cost({"prompt_tokens": 2000, "completion_tokens": 500}, pricing, 5)
+        self.assertEqual(cost["status"], "estimated")
+        self.assertEqual(cost["prompt_cost"], 3.0)
+        self.assertEqual(cost["completion_cost"], 1.5)
+        self.assertEqual(cost["total_cost"], 4.5)
+        self.assertEqual(cost["avg_cost_per_generation"], 0.9)
+        self.assertEqual(len(cost["pricing_fingerprint"]), 64)
+
+    def test_model_cost_estimate_is_na_without_prices(self):
+        cost = MODULE.estimate_model_cost({"prompt_tokens": 100}, {"status": "not_claimed"}, 1)
+        self.assertEqual(cost["status"], "not_claimed")
+        self.assertNotIn("total_cost", cost)
+
     def test_aggregate_tool_latency_is_grouped_and_payload_free(self):
         report = MODULE.aggregate_tool_latency([
             ["search_logs", "success", "100"],
