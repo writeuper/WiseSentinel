@@ -1139,6 +1139,8 @@ func (c *ControllerV1) ActivateAgentConfig(ctx context.Context, req *v1.Activate
 	// two-step update can deactivate the current version and then discover a
 	// missing target, leaving the tenant with no active configuration.
 	isActive := false
+	previousVersion := ""
+	configSHA256 := ""
 	err := g.DB().Transaction(ctx, func(txCtx context.Context, tx gdb.TX) error {
 		var target struct {
 			Version    string `json:"version"`
@@ -1157,6 +1159,21 @@ func (c *ControllerV1) ActivateAgentConfig(ctx context.Context, req *v1.Activate
 		if err := repository.ValidateAgentConfigJSON(req.AgentType, target.Version, target.ConfigJSON); err != nil {
 			return apperr.ErrBadRequest
 		}
+		configSHA256 = agentConfigSHA256(target.ConfigJSON)
+		var previous struct {
+			Version string `json:"version"`
+		}
+		if err := tx.Model("ws_agent_config").Ctx(txCtx).
+			Where("tenant_id", tenantID).
+			Where("agent_type", req.AgentType).
+			Where("is_active", 1).
+			Fields("version").
+			OrderDesc("created_at").
+			Limit(1).
+			Scan(&previous); err != nil {
+			return err
+		}
+		previousVersion = previous.Version
 
 		if _, err := tx.Model("ws_agent_config").Ctx(txCtx).
 			Where("tenant_id", tenantID).
@@ -1180,6 +1197,27 @@ func (c *ControllerV1) ActivateAgentConfig(ctx context.Context, req *v1.Activate
 		if rows == 0 {
 			return apperr.ErrConflict
 		}
+		auditPayload, err := json.Marshal(map[string]string{
+			"agent_type":       req.AgentType,
+			"previous_version": previousVersion,
+			"new_version":      req.Version,
+			"config_sha256":    configSHA256,
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Model("ws_audit_log").Ctx(txCtx).Data(g.Map{
+			"tenant_id":     tenantID,
+			"trace_id":      ctxkeys.TraceIDFrom(ctx),
+			"user_id":       ctxkeys.UserIDFrom(ctx),
+			"action":        "agent_config.activate",
+			"resource_type": "agent_config",
+			"resource_id":   req.AgentType + ":" + req.Version,
+			"request_json":  string(auditPayload),
+			"response_code": 200,
+		}).Insert(); err != nil {
+			return err
+		}
 		isActive = true
 		return nil
 	})
@@ -1188,10 +1226,17 @@ func (c *ControllerV1) ActivateAgentConfig(ctx context.Context, req *v1.Activate
 	}
 
 	return &v1.ActivateAgentConfigRes{
-		AgentType: req.AgentType,
-		Version:   req.Version,
-		IsActive:  isActive,
+		AgentType:       req.AgentType,
+		Version:         req.Version,
+		PreviousVersion: previousVersion,
+		ConfigSHA256:    configSHA256,
+		IsActive:        isActive,
 	}, nil
+}
+
+func agentConfigSHA256(raw string) string {
+	digest := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(digest[:])
 }
 
 // ---------------------------------------------------------------------------

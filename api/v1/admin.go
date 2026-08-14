@@ -76,7 +76,9 @@ type ActivateAgentConfigReq struct {
 
 // ActivateAgentConfigRes confirms activation.
 type ActivateAgentConfigRes struct {
-	AgentType string `json:"agent_type"`
-	Version   string `json:"version"`
-	IsActive  bool   `json:"is_active"`
+	AgentType       string `json:"agent_type"`
+	Version         string `json:"version"`
+	PreviousVersion string `json:"previous_version,omitempty"`
+	ConfigSHA256    string `json:"config_sha256"`
+	IsActive        bool   `json:"is_active"`
 }
