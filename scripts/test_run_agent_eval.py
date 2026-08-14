@@ -11,6 +11,27 @@ SPEC.loader.exec_module(MODULE)
 
 
 class EvalSessionCleanupTests(unittest.TestCase):
+    def test_ranking_metrics_calculate_recall_mrr_and_ndcg(self) -> None:
+        metrics = MODULE.ranking_metrics("doc-a|doc-b", "doc-x|doc-b|doc-a")
+        self.assertEqual(metrics["recall_at_1"], 0.0)
+        self.assertEqual(metrics["recall_at_3"], 1.0)
+        self.assertAlmostEqual(metrics["mrr"], 0.5)
+        self.assertGreater(metrics["ndcg_at_5"], 0.69)
+
+    def test_ranking_report_refuses_unlabelled_rows(self) -> None:
+        report = MODULE.build_rag_ranking_metrics([{"retrieved_doc_ids": "doc-a"}, {"relevant_doc_ids": "doc-a"}])
+        self.assertEqual(report["sample_count"], 0)
+        self.assertIsNone(report["recall_at_5"])
+
+    def test_ranking_report_aggregates_only_labelled_rows(self) -> None:
+        report = MODULE.build_rag_ranking_metrics([
+            {"relevant_doc_ids": "doc-a", "retrieved_doc_ids": "doc-a|doc-b"},
+            {"relevant_doc_ids": "doc-a|doc-b", "retrieved_doc_ids": "doc-x|doc-b"},
+        ])
+        self.assertEqual(report["sample_count"], 2)
+        self.assertEqual(report["recall_at_1"], 0.5)
+        self.assertEqual(report["recall_at_5"], 0.75)
+
     def test_citation_quality_requires_structural_fields_and_counts_versions(self) -> None:
         self.assertEqual(MODULE.citation_quality([{"doc_id":"d", "chunk_id":"c", "source":"s", "snippet":"x", "version":"v1"}, {"doc_id":"d"}]), (2, 1, 1))
         self.assertEqual(MODULE.citation_quality("not-a-list"), (0, 0, 0))

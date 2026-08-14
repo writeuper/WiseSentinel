@@ -265,6 +265,50 @@ def citation_quality(citations: Any) -> Tuple[int, int, int]:
     return total, valid, versioned
 
 
+def split_ids(value: Any) -> List[str]:
+    """Parse a pipe-delimited relevance or retrieval ID list."""
+    if isinstance(value, list):
+        values = value
+    else:
+        values = str(value or "").split("|")
+    return [str(item).strip() for item in values if str(item).strip()]
+
+
+def ranking_metrics(relevant_ids: Any, retrieved_ids: Any, cutoffs: Tuple[int, ...] = (1, 3, 5)) -> Dict[str, float | None]:
+    """Calculate binary-document Recall@K, MRR and nDCG for one query."""
+    relevant = set(split_ids(relevant_ids))
+    retrieved = split_ids(retrieved_ids)
+    if not relevant:
+        return {**{f"recall_at_{k}": None for k in cutoffs}, "mrr": None, **{f"ndcg_at_{k}": None for k in cutoffs}}
+    first_rank = next((index + 1 for index, doc_id in enumerate(retrieved) if doc_id in relevant), None)
+
+    def dcg(values: List[int]) -> float:
+        return sum(value / math.log2(index + 2) for index, value in enumerate(values))
+
+    metrics: Dict[str, float | None] = {"mrr": 1.0 / first_rank if first_rank else 0.0}
+    for k in cutoffs:
+        hits = [1 if doc_id in relevant else 0 for doc_id in retrieved[:k]]
+        ideal = [1] * min(len(relevant), k)
+        metrics[f"recall_at_{k}"] = sum(hits) / len(relevant)
+        ideal_dcg = dcg(ideal)
+        metrics[f"ndcg_at_{k}"] = dcg(hits) / ideal_dcg if ideal_dcg else 0.0
+    return metrics
+
+
+def build_rag_ranking_metrics(rows: List[Dict[str, str]]) -> Dict[str, Any]:
+    """Aggregate ranking metrics only for rows with explicit relevance labels."""
+    samples = []
+    for row in rows:
+        relevant = split_ids(row.get("relevant_doc_ids"))
+        retrieved = split_ids(row.get("retrieved_doc_ids"))
+        if relevant and retrieved:
+            samples.append(ranking_metrics(relevant, retrieved))
+    if not samples:
+        return {"sample_count": 0, "recall_at_1": None, "recall_at_3": None, "recall_at_5": None, "mrr": None, "ndcg_at_5": None}
+    keys = ("recall_at_1", "recall_at_3", "recall_at_5", "mrr", "ndcg_at_5")
+    return {"sample_count": len(samples), **{key: round(sum(float(item[key] or 0.0) for item in samples) / len(samples), 6) for key in keys}}
+
+
 def has_knowledge_workflow_evidence(answer: str, citations: Any) -> bool:
     evidence = answer + "\n" + normalize_text(citations)
     return "上传索引流程" in evidence or "query_internal_docs" in evidence
@@ -419,6 +463,7 @@ def run_case(client: EvalClient, row: Dict[str, str], args: argparse.Namespace) 
     expected_route = (row.get("expected_route") or "").strip().lower()
     actual_route = actual_tools = actual_output = trace_summary = error = ""
     citation_total = citation_valid = citation_versioned = 0
+    retrieved_doc_ids = ""
     trace_verified = True
     started = time.time()
     try:
@@ -428,6 +473,10 @@ def run_case(client: EvalClient, row: Dict[str, str], args: argparse.Namespace) 
             trace = client.get_trace(trace_id) if trace_id else {}
             actual_route, actual_tools, actual_output, trace_summary, trace_verified = extract_chat_result(response, trace)
             citation_total, citation_valid, citation_versioned = citation_quality(response.get("citations"))
+            retrieved_doc_ids = "|".join(dict.fromkeys(
+                citation.get("doc_id", "") for citation in (response.get("citations") or [])
+                if isinstance(citation, dict) and citation.get("doc_id")
+            ))
         elif expected_route == "ops":
             actual_route, actual_tools, actual_output = extract_ops_result(client.call_ops(row.get("input", ""), args.max_iterations))
         elif expected_route == "knowledge":
@@ -450,7 +499,7 @@ def run_case(client: EvalClient, row: Dict[str, str], args: argparse.Namespace) 
     elif not error and not source_ok:
         bad_case = "evidence_source_miss"
     result = dict(row)
-    result.update({"actual_route": actual_route, "actual_tools": actual_tools, "trace_summary": summarize_output(trace_summary, args.output_max_len), "actual_output": summarize_output(actual_output, args.output_max_len), "passed": "Y" if not bad_case else "N", "bad_case": bad_case, "optimization_action": optimization_action(bad_case), "latency_ms": str(int((time.time() - started) * 1000)), "tool_hit": f"{tool_hit}/{tool_total}" if tool_total else "", "forbidden_tool_hit": f"{forbidden_hit}/{forbidden_total}" if forbidden_total else "", "knowledge_hit": f"{knowledge_hit}/{knowledge_total}" if knowledge_total else "", "keyword_hit": f"{keyword_hit}/{keyword_total}" if keyword_total else "", "citation_hit": f"{citation_valid}/{citation_total}" if citation_total else "", "citation_versioned": f"{citation_versioned}/{citation_total}" if citation_total else ""})
+    result.update({"actual_route": actual_route, "actual_tools": actual_tools, "retrieved_doc_ids": retrieved_doc_ids, "trace_summary": summarize_output(trace_summary, args.output_max_len), "actual_output": summarize_output(actual_output, args.output_max_len), "passed": "Y" if not bad_case else "N", "bad_case": bad_case, "optimization_action": optimization_action(bad_case), "latency_ms": str(int((time.time() - started) * 1000)), "tool_hit": f"{tool_hit}/{tool_total}" if tool_total else "", "forbidden_tool_hit": f"{forbidden_hit}/{forbidden_total}" if forbidden_total else "", "knowledge_hit": f"{knowledge_hit}/{knowledge_total}" if knowledge_total else "", "keyword_hit": f"{keyword_hit}/{keyword_total}" if keyword_total else "", "citation_hit": f"{citation_valid}/{citation_total}" if citation_total else "", "citation_versioned": f"{citation_versioned}/{citation_total}" if citation_total else ""})
     return result
 
 
@@ -474,7 +523,7 @@ def read_cases(path: Path) -> Tuple[List[str], List[Dict[str, str]]]:
 
 def write_results(path: Path, fieldnames: List[str], rows: List[Dict[str, str]]) -> None:
     output_fields = list(fieldnames)
-    for field in ["latency_ms", "tool_hit", "forbidden_tool_hit", "knowledge_hit", "keyword_hit", "citation_hit", "citation_versioned", "trace_summary"]:
+    for field in ["latency_ms", "tool_hit", "forbidden_tool_hit", "knowledge_hit", "keyword_hit", "citation_hit", "citation_versioned", "retrieved_doc_ids", "trace_summary"]:
         if field not in output_fields:
             output_fields.append(field)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -553,6 +602,7 @@ def build_metrics(rows: List[Dict[str, str]]) -> Dict[str, Any]:
         "citation_validity_rate": citation_valid / citation_total if citation_total else None,
         "citation_versioned": citation_versioned,
         "citation_version_rate": citation_versioned / citation_total if citation_total else None,
+        "rag_ranking": build_rag_ranking_metrics(rows),
         "business_keyword_hit_rate": business_keyword_hit / business_keyword_total if business_keyword_total else None,
         "business_keyword_hits": business_keyword_hit,
         "business_keyword_total": business_keyword_total,
@@ -578,6 +628,13 @@ def print_metrics(metrics: Dict[str, Any]) -> None:
     print(f"business keyword hit rate: {pct(metrics['business_keyword_hit_rate'])} ({metrics['business_keyword_hits']}/{metrics['business_keyword_total']})")
     print(f"citation validity: {pct(metrics['citation_validity_rate'])} ({metrics['citation_valid']}/{metrics['citation_total']})")
     print(f"citation version coverage: {pct(metrics['citation_version_rate'])} ({metrics['citation_versioned']}/{metrics['citation_total']})")
+    ranking = metrics.get("rag_ranking", {})
+    if ranking.get("sample_count", 0):
+        print(f"RAG ranking samples: {ranking['sample_count']}")
+        print(f"RAG Recall@1/3/5: {pct(ranking['recall_at_1'])} / {pct(ranking['recall_at_3'])} / {pct(ranking['recall_at_5'])}")
+        print(f"RAG MRR/nDCG@5: {ranking['mrr']:.4f} / {ranking['ndcg_at_5']:.4f}")
+    else:
+        print("RAG ranking metrics: N/A (no explicit relevant_doc_ids + retrieved_doc_ids samples)")
     print(f"latency: p50={metrics['latency_ms']['p50']}ms p95={metrics['latency_ms']['p95']}ms")
     print("bad case distribution:")
     for name, count in sorted(metrics["bad_case_distribution"].items(), key=lambda item: (-item[1], item[0])):
