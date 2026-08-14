@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"crypto/subtle"
 	"os"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"wisesentinel-platform/internal/pkg/configx"
 	"wisesentinel-platform/internal/pkg/ctxkeys"
 
+	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/net/ghttp"
 )
 
@@ -25,8 +27,13 @@ func Auth(r *ghttp.Request) {
 	token := extractBearerToken(r)
 	if token == "" {
 		apiKey := strings.TrimSpace(r.Header.Get("X-API-Key"))
+		if serviceCtx, ok := withServiceAPIKeyIdentity(ctx, apiKey); ok {
+			r.SetCtx(serviceCtx)
+			r.Middleware.Next()
+			return
+		}
 		devKey := configx.String(ctx, "auth.dev_api_key", "DEV_API_KEY")
-		if apiKey != "" && devKey != "" && apiKey == devKey && developmentAPIKeyEnabled() {
+		if apiKey != "" && equalSecret(apiKey, devKey) && developmentAPIKeyEnabled() {
 			ctx = withDevelopmentAPIKeyIdentity(ctx)
 			r.SetCtx(ctx)
 			r.Middleware.Next()
@@ -50,6 +57,67 @@ func Auth(r *ghttp.Request) {
 	}
 	r.SetCtx(ctx)
 	r.Middleware.Next()
+}
+
+// withServiceAPIKeyIdentity authenticates a non-development workload key and
+// binds it to an explicitly configured service principal. The presented key
+// never selects tenant, user or roles; those values come from deployment
+// configuration. This is intentionally a single fixed principal until a
+// database-backed key registry with rotation/revocation is introduced.
+func withServiceAPIKeyIdentity(ctx context.Context, presented string) (context.Context, bool) {
+	configured := strings.TrimSpace(os.Getenv("SERVICE_API_KEY"))
+	if configured == "" {
+		configured = strings.TrimSpace(configx.String(ctx, "auth.service_api_key", "SERVICE_API_KEY"))
+	}
+	if configured == "" || !equalSecret(presented, configured) {
+		return ctx, false
+	}
+	tenantID := strings.TrimSpace(os.Getenv("SERVICE_API_TENANT_ID"))
+	if tenantID == "" {
+		tenantID = strings.TrimSpace(g.Cfg().MustGet(ctx, "auth.service_tenant_id", domain.DefaultTenantID).String())
+	}
+	userID := strings.TrimSpace(os.Getenv("SERVICE_API_USER_ID"))
+	if userID == "" {
+		userID = strings.TrimSpace(g.Cfg().MustGet(ctx, "auth.service_user_id", "service_api_user").String())
+	}
+	roles := configuredRoles(ctx)
+	if tenantID == "" || userID == "" || len(roles) == 0 {
+		return ctx, false
+	}
+	ctx = ctxkeys.WithTenantID(ctx, tenantID)
+	ctx = ctxkeys.WithUserID(ctx, userID)
+	return ctxkeys.WithRoles(ctx, roles), true
+}
+
+func configuredRoles(ctx context.Context) []string {
+	value := strings.TrimSpace(os.Getenv("SERVICE_API_ROLES"))
+	if value == "" {
+		value = strings.TrimSpace(g.Cfg().MustGet(ctx, "auth.service_roles", "operator").String())
+	}
+	parts := strings.Split(value, ",")
+	roles := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if role := strings.TrimSpace(part); role != "" {
+			roles = append(roles, role)
+		}
+	}
+	return roles
+}
+
+func equalSecret(left, right string) bool {
+	if left == "" || right == "" {
+		return false
+	}
+	leftBytes, rightBytes := []byte(left), []byte(right)
+	if len(leftBytes) != len(rightBytes) {
+		// Keep comparison work independent of the common prefix while avoiding
+		// accepting keys of different lengths.
+		padded := make([]byte, len(leftBytes))
+		copy(padded, rightBytes)
+		subtle.ConstantTimeCompare(leftBytes, padded)
+		return false
+	}
+	return subtle.ConstantTimeCompare(leftBytes, rightBytes) == 1
 }
 
 // withDevelopmentAPIKeyIdentity binds the development key to one fixed

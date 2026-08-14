@@ -48,6 +48,45 @@ func TestDevelopmentAPIKeyDisabledInProduction(t *testing.T) {
 	}
 }
 
+func TestServiceAPIKeyBindsConfiguredIdentityAndIgnoresRequestTenant(t *testing.T) {
+	for key, value := range map[string]string{
+		"SERVICE_API_KEY":       "service-key-canary",
+		"SERVICE_API_TENANT_ID": "tenant-service",
+		"SERVICE_API_USER_ID":   "svc-ops",
+		"SERVICE_API_ROLES":     "operator,sre_admin",
+	} {
+		old := os.Getenv(key)
+		t.Cleanup(func() { _ = os.Setenv(key, old) })
+		_ = os.Setenv(key, value)
+	}
+	ctx := ctxkeys.WithTenantID(context.Background(), "attacker-tenant")
+	got, ok := withServiceAPIKeyIdentity(ctx, "service-key-canary")
+	if !ok {
+		t.Fatal("configured service API key rejected")
+	}
+	if gotTenant := ctxkeys.TenantIDFrom(got); gotTenant != "tenant-service" {
+		t.Fatalf("service tenant = %q, want tenant-service", gotTenant)
+	}
+	if gotUser := ctxkeys.UserIDFrom(got); gotUser != "svc-ops" {
+		t.Fatalf("service user = %q, want svc-ops", gotUser)
+	}
+	if roles := ctxkeys.RolesFrom(got); len(roles) != 2 || roles[0] != "operator" || roles[1] != "sre_admin" {
+		t.Fatalf("service roles = %#v", roles)
+	}
+}
+
+func TestServiceAPIKeyRejectsWrongOrMissingConfiguration(t *testing.T) {
+	old := os.Getenv("SERVICE_API_KEY")
+	t.Cleanup(func() { _ = os.Setenv("SERVICE_API_KEY", old) })
+	_ = os.Setenv("SERVICE_API_KEY", "service-key")
+	if _, ok := withServiceAPIKeyIdentity(context.Background(), "wrong-key"); ok {
+		t.Fatal("wrong service API key accepted")
+	}
+	if _, ok := withServiceAPIKeyIdentity(context.Background(), ""); ok {
+		t.Fatal("empty service API key accepted")
+	}
+}
+
 func TestJWTIdentityUsesClaimTenantInsteadOfRequestTenant(t *testing.T) {
 	ctx := ctxkeys.WithTenantID(context.Background(), "attacker-selected-tenant")
 	ctx, ok := withJWTIdentity(ctx, &auth.Claims{TenantID: "tenant-from-jwt"})

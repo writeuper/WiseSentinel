@@ -24,6 +24,12 @@ auth:
   jwt_expire_hours: 24
   dev_api_key: "ws-dev-key"
   dev_password: "dev123"
+  # Optional fixed workload identity. Keep the key out of this repository in
+  # production and inject SERVICE_API_KEY through the secret manager.
+  service_api_key: ""
+  service_tenant_id: "default"
+  service_user_id: "service_api_user"
+  service_roles: "operator"
 
 milvus:
   address: "127.0.0.1:19530"
