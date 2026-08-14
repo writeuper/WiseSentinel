@@ -200,6 +200,15 @@ def aggregate_tool_governance(rows: list[list[str]], policy: dict[str, Any]) -> 
     approval_rows = [row for row in rows if row and str(row[0] or "").strip() in approval_tools]
     approval_calls = len(approval_rows)
     approval_bound = sum(1 for row in approval_rows if len(row) > 3 and str(row[3] or "").strip())
+    approval_states: dict[str, int] = defaultdict(int)
+    for row in approval_rows:
+        if len(row) <= 3 or not str(row[3] or "").strip():
+            approval_states["missing_reference"] += 1
+            continue
+        state = str(row[4] or "missing").strip().lower() if len(row) > 4 else "not_checked"
+        if state not in {"approved", "pending", "rejected", "expired", "canceled", "missing", "not_checked"}:
+            state = "unknown"
+        approval_states[state] += 1
     if not approval_rows:
         binding = "not_applicable"
     elif approval_bound == approval_calls:
@@ -213,6 +222,7 @@ def aggregate_tool_governance(rows: list[list[str]], policy: dict[str, Any]) -> 
         "unknown_tool_calls": unknown_tools,
         "approval_required_calls": approval_calls,
         "approval_bound_calls": approval_bound,
+        "approval_state_counts": dict(sorted(approval_states.items())),
         "approval_binding": binding,
         "approval_binding_reason": "approval reference is recorded; approval state and side-effect execution still require a dedicated executor check",
     }
@@ -958,9 +968,14 @@ def aggregate(traffic_attestation_path: str | None = None, pricing_profile_path:
       FROM ws_tool_call_record
     """)[0]
     tool_latency_rows = mysql_query("""
-      SELECT tool_name, status, latency_ms, approval_id
-      FROM ws_tool_call_record
-      WHERE latency_ms >= 0
+      SELECT r.tool_name, r.status, r.latency_ms, r.approval_id,
+             COALESCE(a.status, 'missing')
+      FROM ws_tool_call_record r
+      LEFT JOIN ws_approval a
+        ON a.tenant_id = r.tenant_id
+       AND a.approval_id = r.approval_id
+       AND r.approval_id <> ''
+      WHERE r.latency_ms >= 0
     """)
     index_task_rows = mysql_query("""
       SELECT status, REPLACE(REPLACE(COALESCE(error_msg, ''), CHAR(10), ' '), CHAR(13), ' '), COUNT(*)
