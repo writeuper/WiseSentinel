@@ -238,6 +238,46 @@ def extract_trace_tool_calls(trace: Dict[str, Any]) -> Tuple[str, str]:
     return "|".join(sorted(set(tools))), "\n".join(summary)
 
 
+def extract_trace_evidence_doc_ids(trace: Dict[str, Any]) -> set[str]:
+    """Extract document IDs from independent persisted Trace evidence.
+
+    Only evidence-bearing fields are inspected.  This intentionally does not
+    derive IDs from the chat response/Citations, otherwise the grounding check
+    would merely compare a response with itself and provide false confidence.
+    """
+    evidence_ids: set[str] = set()
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            doc_id = value.get("doc_id")
+            if isinstance(doc_id, str) and doc_id.strip():
+                evidence_ids.add(doc_id.strip())
+            for key in ("documents", "citations", "evidence"):
+                if key in value:
+                    collect(value[key])
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+    for step in trace.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        for field in ("output_summary", "output", "evidence", "detail"):
+            value = step.get(field)
+            values = value if isinstance(value, list) else [value]
+            for item in values:
+                if isinstance(item, dict):
+                    collect(item)
+                elif isinstance(item, str):
+                    # Structured JSON summaries are common in persisted traces.
+                    try:
+                        decoded = json.loads(item)
+                    except (TypeError, ValueError):
+                        continue
+                    if isinstance(decoded, dict):
+                        collect(decoded)
+    return evidence_ids
+
+
 def extract_chat_result(resp: Dict[str, Any], trace: Dict[str, Any] | None = None) -> Tuple[str, str, str, str, bool]:
     trace_data = trace or {}
     verified_tools, trace_summary = extract_trace_tool_calls(trace_data)
@@ -267,6 +307,15 @@ def citation_quality(citations: Any) -> Tuple[int, int, int]:
             if isinstance(citation.get("version"), str) and citation.get("version", "").strip():
                 versioned += 1
     return total, valid, versioned
+
+
+def citation_grounding_quality(citations: Any, evidence_doc_ids: set[str]) -> Tuple[int, int, bool]:
+    """Return grounded, total and whether an independent evidence set exists."""
+    if not evidence_doc_ids or not isinstance(citations, list):
+        return 0, 0, False
+    valid_citations = [c for c in citations if isinstance(c, dict) and isinstance(c.get("doc_id"), str) and c.get("doc_id", "").strip()]
+    grounded = sum(1 for citation in valid_citations if citation["doc_id"].strip() in evidence_doc_ids)
+    return grounded, len(valid_citations), True
 
 
 def split_ids(value: Any) -> List[str]:
@@ -541,6 +590,7 @@ def run_case(client: EvalClient, row: Dict[str, str], args: argparse.Namespace) 
     expected_route = (row.get("expected_route") or "").strip().lower()
     actual_route = actual_tools = actual_output = trace_summary = error = ""
     citation_total = citation_valid = citation_versioned = 0
+    citation_grounded = citation_grounding_total = 0
     retrieved_doc_ids = ""
     trace_verified = True
     started = time.time()
@@ -551,6 +601,9 @@ def run_case(client: EvalClient, row: Dict[str, str], args: argparse.Namespace) 
             trace = client.get_trace(trace_id) if trace_id else {}
             actual_route, actual_tools, actual_output, trace_summary, trace_verified = extract_chat_result(response, trace)
             citation_total, citation_valid, citation_versioned = citation_quality(response.get("citations"))
+            citation_grounded, citation_grounding_total, _ = citation_grounding_quality(
+                response.get("citations"), extract_trace_evidence_doc_ids(trace)
+            )
             retrieved_doc_ids = "|".join(dict.fromkeys(
                 citation.get("doc_id", "") for citation in (response.get("citations") or [])
                 if isinstance(citation, dict) and citation.get("doc_id")
@@ -577,7 +630,7 @@ def run_case(client: EvalClient, row: Dict[str, str], args: argparse.Namespace) 
     elif not error and not source_ok:
         bad_case = "evidence_source_miss"
     result = dict(row)
-    result.update({"actual_route": actual_route, "actual_tools": actual_tools, "retrieved_doc_ids": retrieved_doc_ids, "trace_summary": summarize_output(trace_summary, args.output_max_len), "actual_output": summarize_output(actual_output, args.output_max_len), "passed": "Y" if not bad_case else "N", "bad_case": bad_case, "optimization_action": optimization_action(bad_case), "latency_ms": str(int((time.time() - started) * 1000)), "tool_hit": f"{tool_hit}/{tool_total}" if tool_total else "", "forbidden_tool_hit": f"{forbidden_hit}/{forbidden_total}" if forbidden_total else "", "knowledge_hit": f"{knowledge_hit}/{knowledge_total}" if knowledge_total else "", "keyword_hit": f"{keyword_hit}/{keyword_total}" if keyword_total else "", "citation_hit": f"{citation_valid}/{citation_total}" if citation_total else "", "citation_versioned": f"{citation_versioned}/{citation_total}" if citation_total else ""})
+    result.update({"actual_route": actual_route, "actual_tools": actual_tools, "retrieved_doc_ids": retrieved_doc_ids, "trace_summary": summarize_output(trace_summary, args.output_max_len), "actual_output": summarize_output(actual_output, args.output_max_len), "passed": "Y" if not bad_case else "N", "bad_case": bad_case, "optimization_action": optimization_action(bad_case), "latency_ms": str(int((time.time() - started) * 1000)), "tool_hit": f"{tool_hit}/{tool_total}" if tool_total else "", "forbidden_tool_hit": f"{forbidden_hit}/{forbidden_total}" if forbidden_total else "", "knowledge_hit": f"{knowledge_hit}/{knowledge_total}" if knowledge_total else "", "keyword_hit": f"{keyword_hit}/{keyword_total}" if keyword_total else "", "citation_hit": f"{citation_valid}/{citation_total}" if citation_total else "", "citation_versioned": f"{citation_versioned}/{citation_total}" if citation_total else "", "citation_grounded": f"{citation_grounded}/{citation_grounding_total}" if citation_grounding_total else ""})
     return result
 
 
@@ -601,7 +654,7 @@ def read_cases(path: Path) -> Tuple[List[str], List[Dict[str, str]]]:
 
 def write_results(path: Path, fieldnames: List[str], rows: List[Dict[str, str]]) -> None:
     output_fields = list(fieldnames)
-    for field in ["latency_ms", "tool_hit", "forbidden_tool_hit", "knowledge_hit", "keyword_hit", "citation_hit", "citation_versioned", "retrieved_doc_ids", "trace_summary"]:
+    for field in ["latency_ms", "tool_hit", "forbidden_tool_hit", "knowledge_hit", "keyword_hit", "citation_hit", "citation_versioned", "citation_grounded", "retrieved_doc_ids", "trace_summary"]:
         if field not in output_fields:
             output_fields.append(field)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -639,6 +692,7 @@ def build_metrics(rows: List[Dict[str, str]]) -> Dict[str, Any]:
                     business_keyword_hit += int(hit)
                     business_keyword_total += int(total)
     citation_valid = citation_total = citation_versioned = 0
+    citation_grounded = citation_grounding_total = 0
     for row in executable:
         for field, target in (("citation_hit", "valid"), ("citation_versioned", "versioned")):
             if row.get(field):
@@ -648,6 +702,10 @@ def build_metrics(rows: List[Dict[str, str]]) -> Dict[str, Any]:
                     citation_total += int(total)
                 else:
                     citation_versioned += int(hit)
+        if row.get("citation_grounded"):
+            hit, total = row["citation_grounded"].split("/", 1)
+            citation_grounded += int(hit)
+            citation_grounding_total += int(total)
     latencies = sorted(int(row.get("latency_ms") or 0) for row in executable)
     def percentile(percent: float) -> int | None:
         if not latencies:
@@ -682,6 +740,9 @@ def build_metrics(rows: List[Dict[str, str]]) -> Dict[str, Any]:
         "citation_validity_rate": citation_valid / citation_total if citation_total else None,
         "citation_versioned": citation_versioned,
         "citation_version_rate": citation_versioned / citation_total if citation_total else None,
+        "citation_grounded": citation_grounded,
+        "citation_grounding_total": citation_grounding_total,
+        "citation_grounding_rate": citation_grounded / citation_grounding_total if citation_grounding_total else None,
         "rag_ranking": build_rag_ranking_metrics(rows),
         "rag_ranking_verified": build_rag_ranking_metrics(rows, require_verified=True),
         "business_keyword_hit_rate": business_keyword_hit / business_keyword_total if business_keyword_total else None,
@@ -712,6 +773,7 @@ def print_metrics(metrics: Dict[str, Any]) -> None:
     print(f"business keyword hit rate: {pct(metrics['business_keyword_hit_rate'])} ({metrics['business_keyword_hits']}/{metrics['business_keyword_total']})")
     print(f"citation validity: {pct(metrics['citation_validity_rate'])} ({metrics['citation_valid']}/{metrics['citation_total']})")
     print(f"citation version coverage: {pct(metrics['citation_version_rate'])} ({metrics['citation_versioned']}/{metrics['citation_total']})")
+    print(f"citation grounding against independent Trace evidence: {pct(metrics['citation_grounding_rate'])} ({metrics['citation_grounded']}/{metrics['citation_grounding_total']})")
     ranking = metrics.get("rag_ranking", {})
     if ranking.get("sample_count", 0):
         print(f"RAG ranking samples: {ranking['sample_count']}")

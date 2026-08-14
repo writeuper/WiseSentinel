@@ -88,6 +88,22 @@ class EvalSessionCleanupTests(unittest.TestCase):
         self.assertEqual(MODULE.citation_quality([{"doc_id":"d", "chunk_id":"c", "source":"s", "snippet":"x", "version":"v1"}, {"doc_id":"d"}]), (2, 1, 1))
         self.assertEqual(MODULE.citation_quality("not-a-list"), (0, 0, 0))
 
+    def test_citation_grounding_uses_independent_trace_evidence(self) -> None:
+        trace = {"steps": [{"step_type": "tool", "output_summary": {"documents": [{"doc_id": "doc-a"}]}}]}
+        evidence = MODULE.extract_trace_evidence_doc_ids(trace)
+        self.assertEqual(evidence, {"doc-a"})
+        self.assertEqual(MODULE.citation_grounding_quality([{"doc_id": "doc-a"}, {"doc_id": "doc-b"}], evidence), (1, 2, True))
+
+    def test_citation_grounding_is_na_without_independent_evidence(self) -> None:
+        grounded, total, verifiable = MODULE.citation_grounding_quality([{"doc_id": "doc-a"}], set())
+        self.assertEqual((grounded, total), (0, 0))
+        self.assertFalse(verifiable)
+
+    def test_metrics_keep_citation_grounding_na_when_trace_evidence_missing(self) -> None:
+        metrics = MODULE.build_metrics([{"actual_route": "chat", "expected_route": "chat", "passed": "Y", "bad_case": "", "citation_hit": "1/1"}])
+        self.assertIsNone(metrics["citation_grounding_rate"])
+        self.assertEqual(metrics["citation_grounding_total"], 0)
+
     def test_default_evaluation_input_is_frozen_enterprise_matrix(self) -> None:
         self.assertEqual(MODULE.DEFAULT_INPUT, "docs/整理与提升/enterprise_agent_eval_cases_130.csv")
 
