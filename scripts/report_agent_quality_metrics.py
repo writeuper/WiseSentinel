@@ -133,21 +133,50 @@ def aggregate_tool_latency(rows: list[list[str]]) -> dict[str, Any]:
 
 
 def load_tool_policy(path: str) -> dict[str, Any]:
-    """Load an explicit versioned tool-risk policy; never infer risk from names."""
+    """Load an explicit versioned tool-risk policy; never infer risk from names.
+
+    JSON policy files use a ``tools`` mapping. The platform's YAML config is
+    also accepted so risk definitions do not need to be duplicated; YAML tool
+    entries must explicitly carry ``approval_required`` as well.
+    """
     if not path:
         return {"status": "not_claimed", "reason": "no_tool_policy_configured"}
     try:
-        with open(path, encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except (OSError, json.JSONDecodeError):
+        with open(path, "rb") as handle:
+            raw = handle.read()
+        if path.lower().endswith((".yaml", ".yml")):
+            try:
+                import yaml  # type: ignore
+            except ImportError:
+                return {"status": "invalid", "reason": "tool_policy_yaml_dependency_missing"}
+            try:
+                payload = yaml.safe_load(raw.decode("utf-8"))
+            except yaml.YAMLError:
+                return {"status": "invalid", "reason": "tool_policy_unreadable"}
+        else:
+            payload = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {"status": "invalid", "reason": "tool_policy_unreadable"}
-    if not isinstance(payload, dict) or not isinstance(payload.get("tools"), dict):
+    if not isinstance(payload, dict):
         return {"status": "invalid", "reason": "tool_policy_schema"}
-    profile = str(payload.get("profile") or "").strip()
+    raw_tools = payload.get("tools")
+    if isinstance(raw_tools, list):
+        tool_entries = {}
+        for item in raw_tools:
+            if not isinstance(item, dict):
+                return {"status": "invalid", "reason": "tool_policy_tool_entry"}
+            name = str(item.get("name") or "").strip()
+            if not name or name in tool_entries:
+                return {"status": "invalid", "reason": "tool_policy_tool_entry"}
+            tool_entries[name] = item
+        raw_tools = tool_entries
+    if not isinstance(raw_tools, dict):
+        return {"status": "invalid", "reason": "tool_policy_schema"}
+    profile = str(payload.get("profile") or ("platform-config" if path.lower().endswith((".yaml", ".yml")) else "")).strip()
     if not profile or len(profile) > 128 or not re.fullmatch(r"[A-Za-z0-9._:-]+", profile):
         return {"status": "invalid", "reason": "tool_policy_profile"}
     tools: dict[str, dict[str, Any]] = {}
-    for name, raw in payload["tools"].items():
+    for name, raw in raw_tools.items():
         tool_name = str(name or "").strip()
         if not tool_name or not isinstance(raw, dict):
             return {"status": "invalid", "reason": "tool_policy_tool_entry"}

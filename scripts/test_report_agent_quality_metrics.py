@@ -323,6 +323,13 @@ ws_model_tokens_total{operation="generate",provider="secret",token_type="unknown
             path.write_text(json.dumps({"profile": "bad", "tools": {"x": {"risk_level": "L9"}}}), encoding="utf-8")
             self.assertEqual(MODULE.load_tool_policy(str(path))["status"], "invalid")
 
+    def test_platform_yaml_config_is_a_single_source_for_tool_risk_policy(self):
+        policy = MODULE.load_tool_policy("manifest/config/config.yaml")
+        self.assertEqual(policy["status"], "valid")
+        self.assertEqual(policy["profile"], "platform-config")
+        self.assertEqual(len(policy["tools"]), 10)
+        self.assertFalse(policy["tools"]["query_internal_docs"]["approval_required"])
+
     def test_tool_governance_reports_risk_outcomes_without_claiming_approval_binding(self):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / "policy.json"
