@@ -385,6 +385,11 @@ func (m *OpenAIEinoModel) Stream(ctx context.Context, input []*schema.Message, o
 		// Accumulator for streaming chunks
 		fullContent := strings.Builder{}
 		var toolCalls []schema.ToolCall
+		var streamUsage *struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		}
 		reader := bufio.NewReader(resp.Body)
 		for {
 			line, readErr := reader.ReadString('\n')
@@ -420,9 +425,17 @@ func (m *OpenAIEinoModel) Stream(ctx context.Context, input []*schema.Message, o
 					} `json:"delta"`
 					FinishReason string `json:"finish_reason"`
 				} `json:"choices"`
+				Usage *struct {
+					PromptTokens     int `json:"prompt_tokens"`
+					CompletionTokens int `json:"completion_tokens"`
+					TotalTokens      int `json:"total_tokens"`
+				} `json:"usage,omitempty"`
 			}
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 				continue
+			}
+			if chunk.Usage != nil {
+				streamUsage = chunk.Usage
 			}
 			for _, c := range chunk.Choices {
 				if c.Delta.Content != "" {
@@ -457,6 +470,9 @@ func (m *OpenAIEinoModel) Stream(ctx context.Context, input []*schema.Message, o
 				Content:   fullContent.String(),
 				ToolCalls: toolCalls,
 			}, nil)
+		}
+		if streamUsage != nil {
+			observability.ObserveModelTokens(m.provider, "stream_complete", streamUsage.PromptTokens, streamUsage.CompletionTokens, streamUsage.TotalTokens)
 		}
 	}()
 

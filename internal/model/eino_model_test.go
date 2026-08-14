@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -196,6 +197,51 @@ func TestStreamUsesProfileTimeoutForCompleteBody(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("stream Recv error = %v, want profile deadline", err)
 	}
+}
+
+func TestStreamObservesProviderUsageChunk(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":3,\"total_tokens\":7}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	m := NewOpenAIEinoModel("test", "test-model", "key", server.URL, time.Second)
+	reader, err := m.Stream(context.Background(), []*schema.Message{{Role: schema.User, Content: "hello"}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer reader.Close()
+	for {
+		_, recvErr := reader.Recv()
+		if recvErr != nil {
+			if recvErr != io.EOF {
+				t.Fatalf("stream receive: %v", recvErr)
+			}
+			break
+		}
+	}
+	families, err := observability.Registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "ws_model_tokens_total" {
+			continue
+		}
+		for _, metric := range family.Metric {
+			labels := map[string]string{}
+			for _, label := range metric.Label {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if labels["provider"] == "other" && labels["operation"] == "stream_complete" && labels["token_type"] == "total" && metric.Counter.GetValue() >= 7 {
+				return
+			}
+		}
+	}
+	t.Fatal("stream token usage metric not observed")
 }
 
 func TestBuildRequestNormalizesForcedToolChoice(t *testing.T) {
