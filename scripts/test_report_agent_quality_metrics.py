@@ -152,6 +152,32 @@ ws_model_tokens_total{operation="generate",provider="secret",token_type="unknown
         self.assertEqual(report["failure_rate"], 50.0)
         self.assertEqual(report["failure_categories"], {"document_deleted": 1, "embedding_not_found": 1, "embedding_quota": 2, "milvus_deadline": 2})
 
+    def test_aggregate_ops_tasks_reports_completion_failure_inflight_and_latency(self):
+        report = MODULE.aggregate_ops_tasks([
+            ["success", "3", "3", "900"],
+            ["failed", "1", "1", "500"],
+            ["timeout", "1", "1", "700"],
+            ["running", "2", "0", "0"],
+            ["retrying", "1", "0", "0"],
+            ["unexpected-secret-status", "1", "1", "100"],
+        ])
+        self.assertEqual(report["total"], 9)
+        self.assertEqual(report["finished"], 6)
+        self.assertEqual(report["successful"], 3)
+        self.assertEqual(report["failed_or_timeout"], 2)
+        self.assertEqual(report["in_flight"], 3)
+        self.assertEqual(report["completion_rate"], 50.0)
+        self.assertEqual(report["failure_rate"], 33.33)
+        self.assertEqual(report["avg_e2e_latency_ms"], 366.667)
+        self.assertIn("other", report["by_status"])
+
+    def test_aggregate_ops_tasks_without_finished_rows_is_explicitly_unavailable(self):
+        report = MODULE.aggregate_ops_tasks([["running", "2", "0", "0"]])
+        self.assertIsNone(report["completion_rate"])
+        self.assertIsNone(report["failure_rate"])
+        self.assertIsNone(report["avg_e2e_latency_ms"])
+        self.assertEqual(report["in_flight"], 2)
+
     def test_aggregate_trace_latency_separates_abandoned_and_reports_percentiles(self):
         report = MODULE.aggregate_trace_latency([
             ["success", "100"], ["success", "200"], ["failed", "900"],

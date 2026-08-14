@@ -131,6 +131,52 @@ def aggregate_index_tasks(rows: list[list[str]]) -> dict[str, Any]:
     }
 
 
+OPS_TASK_STATUSES = {"pending", "running", "retrying", "timeout", "success", "failed", "awaiting_approval"}
+
+
+def normalize_ops_task_status(status: str) -> str:
+    value = str(status or "").strip()
+    return value if value in OPS_TASK_STATUSES else "other"
+
+
+def aggregate_ops_tasks(rows: list[list[str]]) -> dict[str, Any]:
+    """Aggregate durable Ops task states and e2e latency without identifiers.
+
+    Rows are ``status, total, finished_count, latency_sum_ms``.  The query
+    deliberately supplies counts/sums rather than task IDs or input bodies.
+    """
+    by_status: dict[str, int] = defaultdict(int)
+    finished = success = failed = in_flight = 0
+    latency_sum = 0.0
+    for row in rows:
+        if len(row) < 2:
+            continue
+        status = normalize_ops_task_status(row[0])
+        total = max(0, safe_int(row[1]))
+        finished_count = max(0, safe_int(row[2])) if len(row) > 2 else 0
+        latency = max(0.0, safe_float(row[3])) if len(row) > 3 else 0.0
+        by_status[status] += total
+        finished += finished_count
+        latency_sum += latency
+        if status == "success":
+            success += finished_count
+        elif status in {"failed", "timeout"}:
+            failed += finished_count
+        elif status in {"pending", "running", "retrying"}:
+            in_flight += total
+    return {
+        "total": sum(by_status.values()),
+        "finished": finished,
+        "in_flight": in_flight,
+        "successful": success,
+        "failed_or_timeout": failed,
+        "completion_rate": round(success / finished * 100, 2) if finished else None,
+        "failure_rate": round(failed / finished * 100, 2) if finished else None,
+        "avg_e2e_latency_ms": round(latency_sum / finished, 3) if finished else None,
+        "by_status": dict(sorted(by_status.items())),
+    }
+
+
 def aggregate_trace_latency(rows: list[list[str]]) -> dict[str, Any]:
     """Aggregate durable Agent trace latency without exposing identifiers.
 
@@ -450,6 +496,23 @@ def aggregate() -> dict[str, Any]:
       WHERE created_at >= NOW() - INTERVAL 24 HOUR
       GROUP BY status, error_msg
     """)
+    ops_task_rows = mysql_query("""
+      SELECT status, COUNT(*),
+             COALESCE(SUM(CASE WHEN finished_at IS NOT NULL THEN 1 ELSE 0 END),0),
+             COALESCE(SUM(CASE WHEN finished_at IS NOT NULL
+                 THEN TIMESTAMPDIFF(MICROSECOND, created_at, finished_at) / 1000 ELSE 0 END),0)
+      FROM ws_ops_task
+      GROUP BY status
+    """)
+    ops_task_recent_rows = mysql_query("""
+      SELECT status, COUNT(*),
+             COALESCE(SUM(CASE WHEN finished_at IS NOT NULL THEN 1 ELSE 0 END),0),
+             COALESCE(SUM(CASE WHEN finished_at IS NOT NULL
+                 THEN TIMESTAMPDIFF(MICROSECOND, created_at, finished_at) / 1000 ELSE 0 END),0)
+      FROM ws_ops_task
+      WHERE created_at >= NOW() - INTERVAL 24 HOUR
+      GROUP BY status
+    """)
     metrics_text = fetch_raw_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics"))
     result: dict[str, Any] = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -473,6 +536,12 @@ def aggregate() -> dict[str, Any]:
                         **aggregate_tool_latency(tool_latency_rows)},
         "index_tasks": aggregate_index_tasks(index_task_rows),
         "index_tasks_recent_24h": aggregate_index_tasks(index_task_recent_rows),
+        "ops_tasks": aggregate_ops_tasks(ops_task_rows),
+        "ops_tasks_recent_24h": aggregate_ops_tasks(ops_task_recent_rows),
+        "traffic_evidence": {
+            "status": "not_claimed",
+            "source": "durable application aggregates and Prometheus; no attested production-user feed configured",
+        },
         "rag_retrieval": parse_prometheus(metrics_text) if metrics_text else fetch_metrics(os.environ.get("METRICS_URL", "http://127.0.0.1:8090/metrics")),
         "rag_inventory": parse_rag_inventory(metrics_text),
         "model_generation": parse_model_prometheus(metrics_text),
@@ -513,6 +582,11 @@ def main() -> int:
         recent_index_tasks = report["index_tasks_recent_24h"]
         print(f"- Index tasks (last 24h): total={recent_index_tasks['total']}, failed_or_dead={recent_index_tasks['failed_or_dead']}, retryable_or_running={recent_index_tasks['retryable_or_running']}, failure_rate={recent_index_tasks['failure_rate'] if recent_index_tasks['failure_rate'] is not None else 'N/A'}%")
         print(f"- Index task failure categories (last 24h): {recent_index_tasks['failure_categories']}")
+        ops_tasks = report["ops_tasks"]
+        print(f"- Ops tasks: total={ops_tasks['total']}, finished={ops_tasks['finished']}, in_flight={ops_tasks['in_flight']}, completion_rate={ops_tasks['completion_rate'] if ops_tasks['completion_rate'] is not None else 'N/A'}%, failure_rate={ops_tasks['failure_rate'] if ops_tasks['failure_rate'] is not None else 'N/A'}%, avg_e2e={ops_tasks['avg_e2e_latency_ms'] if ops_tasks['avg_e2e_latency_ms'] is not None else 'N/A'} ms")
+        recent_ops_tasks = report["ops_tasks_recent_24h"]
+        print(f"- Ops tasks (last 24h): total={recent_ops_tasks['total']}, finished={recent_ops_tasks['finished']}, in_flight={recent_ops_tasks['in_flight']}, completion_rate={recent_ops_tasks['completion_rate'] if recent_ops_tasks['completion_rate'] is not None else 'N/A'}%, failure_rate={recent_ops_tasks['failure_rate'] if recent_ops_tasks['failure_rate'] is not None else 'N/A'}%, avg_e2e={recent_ops_tasks['avg_e2e_latency_ms'] if recent_ops_tasks['avg_e2e_latency_ms'] is not None else 'N/A'} ms")
+        print(f"- Production traffic evidence: {report['traffic_evidence']['status']} ({report['traffic_evidence']['source']})")
         for tool in report["tool_calls"]["by_tool"]:
             zero_note = f", zero_latency={tool['zero_latency_samples']} ({tool['zero_latency_rate']}%)" if tool["zero_latency_samples"] else ""
             print(f"- Tool {tool['tool_name']}: calls={tool['calls']}, success_rate={tool['success_rate']}%, p50={tool['p50_ms']} ms, p95={tool['p95_ms']} ms, success_p95={tool['success_p95_ms']} ms{zero_note}")
