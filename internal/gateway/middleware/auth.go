@@ -2,7 +2,9 @@ package middleware
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"os"
 	"strings"
 
@@ -65,11 +67,7 @@ func Auth(r *ghttp.Request) {
 // configuration. This is intentionally a single fixed principal until a
 // database-backed key registry with rotation/revocation is introduced.
 func withServiceAPIKeyIdentity(ctx context.Context, presented string) (context.Context, bool) {
-	configured := strings.TrimSpace(os.Getenv("SERVICE_API_KEY"))
-	if configured == "" {
-		configured = strings.TrimSpace(configx.String(ctx, "auth.service_api_key", "SERVICE_API_KEY"))
-	}
-	if configured == "" || !equalSecret(presented, configured) {
+	if !serviceAPIKeyMatches(ctx, presented) {
 		return ctx, false
 	}
 	tenantID := strings.TrimSpace(os.Getenv("SERVICE_API_TENANT_ID"))
@@ -91,10 +89,67 @@ func withServiceAPIKeyIdentity(ctx context.Context, presented string) (context.C
 	return ctxkeys.WithScopes(ctx, configuredScopes(ctx)), true
 }
 
+// serviceAPIKeyMatches accepts either a secret-manager supplied plaintext key
+// or a SHA-256 digest. A previous digest can remain configured during a
+// bounded rotation window; no key material is emitted or persisted.
+func serviceAPIKeyMatches(ctx context.Context, presented string) bool {
+	configured := strings.TrimSpace(os.Getenv("SERVICE_API_KEY"))
+	if configured == "" {
+		configured = configuredAuthValue(ctx, "auth.service_api_key", "SERVICE_API_KEY", "")
+	}
+	if configured != "" && equalSecret(presented, configured) {
+		return true
+	}
+	for _, configuredHash := range configuredServiceKeyHashes(ctx) {
+		if equalSHA256(presented, configuredHash) {
+			return true
+		}
+	}
+	return false
+}
+
+func configuredServiceKeyHashes(ctx context.Context) []string {
+	values := []string{
+		strings.TrimSpace(os.Getenv("SERVICE_API_KEY_SHA256")),
+		strings.TrimSpace(os.Getenv("SERVICE_API_KEY_PREVIOUS_SHA256")),
+	}
+	if values[0] == "" {
+		values[0] = configuredAuthValue(ctx, "auth.service_api_key_sha256", "SERVICE_API_KEY_SHA256", "")
+	}
+	if values[1] == "" {
+		values[1] = configuredAuthValue(ctx, "auth.service_api_key_previous_sha256", "SERVICE_API_KEY_PREVIOUS_SHA256", "")
+	}
+	return values
+}
+
+func configuredAuthValue(ctx context.Context, yamlKey, envKey, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(envKey)); value != "" {
+		return value
+	}
+	if value, err := g.Cfg().Get(ctx, yamlKey); err == nil && value != nil {
+		if text := strings.TrimSpace(value.String()); text != "" {
+			return text
+		}
+	}
+	return fallback
+}
+
+func equalSHA256(presented, configuredHex string) bool {
+	if presented == "" || len(configuredHex) != sha256.Size*2 {
+		return false
+	}
+	configured, err := hex.DecodeString(configuredHex)
+	if err != nil || len(configured) != sha256.Size {
+		return false
+	}
+	digest := sha256.Sum256([]byte(presented))
+	return subtle.ConstantTimeCompare(digest[:], configured) == 1
+}
+
 func configuredRoles(ctx context.Context) []string {
 	value := strings.TrimSpace(os.Getenv("SERVICE_API_ROLES"))
 	if value == "" {
-		value = strings.TrimSpace(g.Cfg().MustGet(ctx, "auth.service_roles", "operator").String())
+		value = configuredAuthValue(ctx, "auth.service_roles", "SERVICE_API_ROLES", "operator")
 	}
 	parts := strings.Split(value, ",")
 	roles := make([]string, 0, len(parts))
@@ -109,7 +164,7 @@ func configuredRoles(ctx context.Context) []string {
 func configuredScopes(ctx context.Context) []string {
 	value := strings.TrimSpace(os.Getenv("SERVICE_API_SCOPES"))
 	if value == "" {
-		value = strings.TrimSpace(g.Cfg().MustGet(ctx, "auth.service_scopes", "chat:invoke").String())
+		value = configuredAuthValue(ctx, "auth.service_scopes", "SERVICE_API_SCOPES", "chat:invoke")
 	}
 	parts := strings.Split(value, ",")
 	scopes := make([]string, 0, len(parts))

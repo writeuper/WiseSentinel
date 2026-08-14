@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"testing"
 
@@ -89,6 +91,35 @@ func TestServiceAPIKeyRejectsWrongOrMissingConfiguration(t *testing.T) {
 	if _, ok := withServiceAPIKeyIdentity(context.Background(), ""); ok {
 		t.Fatal("empty service API key accepted")
 	}
+}
+
+func TestServiceAPIKeyAcceptsPrimaryAndPreviousSHA256DuringRotation(t *testing.T) {
+	t.Setenv("SERVICE_API_KEY", "")
+	t.Setenv("SERVICE_API_KEY_SHA256", hashServiceKey("current-key"))
+	t.Setenv("SERVICE_API_KEY_PREVIOUS_SHA256", hashServiceKey("previous-key"))
+	if !serviceAPIKeyMatches(context.Background(), "current-key") {
+		t.Fatal("primary SHA-256 service key rejected")
+	}
+	if !serviceAPIKeyMatches(context.Background(), "previous-key") {
+		t.Fatal("previous SHA-256 service key rejected during rotation")
+	}
+	if serviceAPIKeyMatches(context.Background(), "wrong-key") {
+		t.Fatal("wrong SHA-256 service key accepted")
+	}
+}
+
+func TestServiceAPIKeyRejectsMalformedSHA256Configuration(t *testing.T) {
+	t.Setenv("SERVICE_API_KEY", "")
+	t.Setenv("SERVICE_API_KEY_SHA256", "not-a-digest")
+	t.Setenv("SERVICE_API_KEY_PREVIOUS_SHA256", "00")
+	if serviceAPIKeyMatches(context.Background(), "current-key") {
+		t.Fatal("malformed SHA-256 configuration accepted")
+	}
+}
+
+func hashServiceKey(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:])
 }
 
 func TestJWTIdentityUsesClaimTenantInsteadOfRequestTenant(t *testing.T) {
