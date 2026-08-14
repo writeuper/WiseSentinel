@@ -14,6 +14,7 @@ const (
 	TraceID      ctxKey = "trace_id"
 	Roles        ctxKey = "roles"
 	AuthMethod   ctxKey = "auth_method"
+	AuthKeyID    ctxKey = "auth_key_id"
 	Scopes       ctxKey = "scopes"
 	SessionID    ctxKey = "session_id"
 	ToolSink     ctxKey = "tool_sink" // *[]domain.Evidence, populated by Gateway.Invoke
@@ -85,6 +86,15 @@ func WithAuthMethod(ctx context.Context, method string) context.Context {
 
 func AuthMethodFrom(ctx context.Context) string {
 	v, _ := ctx.Value(AuthMethod).(string)
+	return v
+}
+
+func WithAuthKeyID(ctx context.Context, keyID string) context.Context {
+	return context.WithValue(ctx, AuthKeyID, keyID)
+}
+
+func AuthKeyIDFrom(ctx context.Context) string {
+	v, _ := ctx.Value(AuthKeyID).(string)
 	return v
 }
 

@@ -108,6 +108,30 @@ func TestServiceAPIKeyAcceptsPrimaryAndPreviousSHA256DuringRotation(t *testing.T
 	}
 }
 
+func TestServiceAPIKeyRegistryParsesBoundedIdentityLists(t *testing.T) {
+	roles, ok := decodeIdentityList(`["operator","sre_admin"]`, 32, 64)
+	if !ok || len(roles) != 2 || roles[1] != "sre_admin" {
+		t.Fatalf("roles = %#v, ok=%t", roles, ok)
+	}
+	if _, ok := decodeIdentityList(`["operator","operator"]`, 32, 64); ok {
+		t.Fatal("duplicate roles accepted")
+	}
+	if _, ok := decodeIdentityList(`{"role":"operator"}`, 32, 64); ok {
+		t.Fatal("non-list identity accepted")
+	}
+}
+
+func TestServiceAPIKeyRegistryIsOptIn(t *testing.T) {
+	t.Setenv("SERVICE_API_KEY_REGISTRY_ENABLED", "false")
+	if serviceAPIKeyRegistryEnabled(context.Background()) {
+		t.Fatal("service API Key registry enabled without explicit opt-in")
+	}
+	_, enabled, ok := serviceAPIKeyRegistryIdentity(context.Background(), "key")
+	if enabled || ok {
+		t.Fatal("disabled registry performed an authentication lookup")
+	}
+}
+
 func TestServiceAPIKeyRejectsMalformedSHA256Configuration(t *testing.T) {
 	t.Setenv("SERVICE_API_KEY", "")
 	t.Setenv("SERVICE_API_KEY_SHA256", "not-a-digest")

@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"strings"
+	"time"
 
 	"wisesentinel-platform/internal/domain"
 	"wisesentinel-platform/internal/gateway/auth"
@@ -67,6 +69,14 @@ func Auth(r *ghttp.Request) {
 // configuration. This is intentionally a single fixed principal until a
 // database-backed key registry with rotation/revocation is introduced.
 func withServiceAPIKeyIdentity(ctx context.Context, presented string) (context.Context, bool) {
+	if serviceCtx, enabled, ok := serviceAPIKeyRegistryIdentity(ctx, presented); enabled {
+		if ok {
+			return serviceCtx, true
+		}
+		// An explicitly enabled registry is authoritative. Do not fall back
+		// to a static environment key when the DB record is missing/expired.
+		return ctx, false
+	}
 	if !serviceAPIKeyMatches(ctx, presented) {
 		return ctx, false
 	}
@@ -87,6 +97,79 @@ func withServiceAPIKeyIdentity(ctx context.Context, presented string) (context.C
 	ctx = ctxkeys.WithRoles(ctx, roles)
 	ctx = ctxkeys.WithAuthMethod(ctx, "service_api_key")
 	return ctxkeys.WithScopes(ctx, configuredScopes(ctx)), true
+}
+
+type serviceAPIKeyRecord struct {
+	KeyID      string `json:"key_id"`
+	TenantID   string `json:"tenant_id"`
+	UserID     string `json:"user_id"`
+	RolesJSON  string `json:"roles_json"`
+	ScopesJSON string `json:"scopes_json"`
+}
+
+// serviceAPIKeyRegistryIdentity reads only a digest from the optional
+// registry. The feature is opt-in so deployments can migrate schema and
+// Secret Manager independently; once enabled, missing/expired/revoked keys
+// fail closed.
+func serviceAPIKeyRegistryIdentity(ctx context.Context, presented string) (context.Context, bool, bool) {
+	if !serviceAPIKeyRegistryEnabled(ctx) || presented == "" {
+		return ctx, false, false
+	}
+	digest := sha256.Sum256([]byte(presented))
+	keyHash := hex.EncodeToString(digest[:])
+	var row serviceAPIKeyRecord
+	err := g.DB().Model("ws_service_api_key").Ctx(ctx).
+		Where("key_hash", keyHash).
+		Where("status", "active").
+		Where("expires_at IS NULL OR expires_at > ?", time.Now()).
+		Limit(1).
+		Scan(&row)
+	if err != nil || row.KeyID == "" || row.TenantID == "" || row.UserID == "" {
+		return ctx, true, false
+	}
+	roles, ok := decodeIdentityList(row.RolesJSON, 32, 64)
+	if !ok || len(roles) == 0 {
+		return ctx, true, false
+	}
+	scopes, ok := decodeIdentityList(row.ScopesJSON, 64, 128)
+	if !ok {
+		return ctx, true, false
+	}
+	ctx = ctxkeys.WithTenantID(ctx, row.TenantID)
+	ctx = ctxkeys.WithUserID(ctx, row.UserID)
+	ctx = ctxkeys.WithRoles(ctx, roles)
+	ctx = ctxkeys.WithAuthMethod(ctx, "service_api_key")
+	ctx = ctxkeys.WithAuthKeyID(ctx, row.KeyID)
+	return ctxkeys.WithScopes(ctx, scopes), true, true
+}
+
+func decodeIdentityList(raw string, maxItems, maxLen int) ([]string, bool) {
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil || len(values) > maxItems {
+		return nil, false
+	}
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || len(value) > maxLen || strings.ContainsAny(value, "\r\n") {
+			return nil, false
+		}
+		if _, ok := seen[value]; ok {
+			return nil, false
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result, true
+}
+
+func serviceAPIKeyRegistryEnabled(ctx context.Context) bool {
+	value := strings.TrimSpace(os.Getenv("SERVICE_API_KEY_REGISTRY_ENABLED"))
+	if value == "" {
+		value = configuredAuthValue(ctx, "auth.service_api_key_registry_enabled", "SERVICE_API_KEY_REGISTRY_ENABLED", "false")
+	}
+	return strings.EqualFold(value, "true") || value == "1"
 }
 
 // serviceAPIKeyMatches accepts either a secret-manager supplied plaintext key

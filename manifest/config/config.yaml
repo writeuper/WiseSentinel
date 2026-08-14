@@ -29,6 +29,7 @@ auth:
   service_api_key: ""
   service_api_key_sha256: ""
   service_api_key_previous_sha256: ""
+  service_api_key_registry_enabled: false
   service_tenant_id: "default"
   service_user_id: "service_api_user"
   service_roles: "operator"
