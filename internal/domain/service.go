@@ -358,6 +358,7 @@ type OpsAgent interface {
 	ExecuteTask(ctx context.Context, tenantID, taskID, executionToken string) (*OpsAgentResponse, error)
 	GetTaskResult(ctx context.Context, tenantID, taskID string) (*OpsAgentResponse, error)
 	ListTasks(ctx context.Context, tenantID, statusFilter string, page, size int) ([]OpsTaskSummary, int, error)
+	CancelTask(ctx context.Context, tenantID, taskID string) (OpsTaskStatus, error)
 }
 
 // OpsTaskSummary is a lightweight projection of an ops task for list views.

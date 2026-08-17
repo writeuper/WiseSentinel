@@ -110,6 +110,39 @@ func TestOpsTaskLeaseCASAndBoundedRetryIntegration(t *testing.T) {
 	}
 }
 
+func TestOpsTaskContractAndCancellationFenceIntegration(t *testing.T) {
+	dsn := os.Getenv("OPS_TEST_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("OPS_TEST_MYSQL_DSN is not configured")
+	}
+	gdb.SetConfigGroup("default", gdb.ConfigGroup{gdb.ConfigNode{Link: dsn}})
+	ctx := context.Background()
+	tenantID, taskID := "ops-contract-"+uuid.NewString(), "task-"+uuid.NewString()
+	repo := NewOpsTaskRepo()
+	t.Cleanup(func() { _, _ = g.DB().Ctx(ctx).Model("ws_ops_task").Where("tenant_id", tenantID).Delete() })
+	contract := `{"task_id":"` + taskID + `","allowed_tools":["search_logs"],"risk_budget":3}`
+	if err := repo.Create(ctx, &OpsTask{TenantID: tenantID, TaskID: taskID, TriggerType: "manual", InputQuery: "check logs", Status: string(domain.OpsTaskPending), TaskContractJSON: contract}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := repo.Get(ctx, tenantID, taskID)
+	if err != nil || stored == nil || !strings.Contains(stored.TaskContractJSON, "search_logs") {
+		t.Fatalf("stored contract = %#v, err=%v", stored, err)
+	}
+	if claimed, err := repo.ClaimRunnable(ctx, tenantID, taskID, "owner-a", time.Now().Add(time.Minute)); err != nil || !claimed {
+		t.Fatalf("claim=%v err=%v", claimed, err)
+	}
+	if cancelled, err := repo.Cancel(ctx, tenantID, taskID); err != nil || !cancelled {
+		t.Fatalf("cancelled=%v err=%v", cancelled, err)
+	}
+	stored, err = repo.Get(ctx, tenantID, taskID)
+	if err != nil || stored.Status != string(domain.OpsTaskCancelled) || stored.ExecutionToken != "" {
+		t.Fatalf("cancelled task=%#v err=%v", stored, err)
+	}
+	if updated, err := repo.FinishIfOwned(ctx, tenantID, taskID, "owner-a", string(domain.OpsTaskSuccess), "late", `{}`); err != nil || updated {
+		t.Fatalf("late completion updated=%v err=%v", updated, err)
+	}
+}
+
 func TestOpsTaskPersistenceSuppressesTelemetryBodiesIntegration(t *testing.T) {
 	dsn := os.Getenv("OPS_TEST_MYSQL_DSN")
 	if dsn == "" {

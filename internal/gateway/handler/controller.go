@@ -700,6 +700,25 @@ func (c *ControllerV1) GetOpsTask(ctx context.Context, req *v1.GetOpsTaskReq) (*
 	}, nil
 }
 
+func (c *ControllerV1) CancelOpsTask(ctx context.Context, req *v1.CancelOpsTaskReq) (*v1.CancelOpsTaskRes, error) {
+	if req == nil {
+		return nil, apperr.ErrBadRequest
+	}
+	tenantID := ctxkeys.TenantIDFrom(ctx)
+	task, err := c.app.OpsTaskRepo.Get(ctx, tenantID, req.TaskID)
+	if err != nil {
+		return nil, apperr.Wrap(err, apperr.ErrInternal)
+	}
+	if task == nil || !canReadOwnedResource(ctx, task.CreatedBy) {
+		return nil, apperr.ErrNotFound
+	}
+	status, err := c.app.OpsAgent.CancelTask(ctx, tenantID, req.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	return &v1.CancelOpsTaskRes{TaskID: req.TaskID, Status: string(status)}, nil
+}
+
 // ListOpsTasks returns a page of recent ops tasks for the tenant.
 func (c *ControllerV1) ListOpsTasks(ctx context.Context, req *v1.ListOpsTasksReq) (*v1.ListOpsTasksRes, error) {
 	if req == nil {

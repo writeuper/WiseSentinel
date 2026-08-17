@@ -26,4 +26,6 @@
 !/docs/knowledge/
 !/docs/knowledge/runbooks/
 !/docs/knowledge/runbooks/*.md
+!/docs/design/
+!/docs/design/*.md
 /platform

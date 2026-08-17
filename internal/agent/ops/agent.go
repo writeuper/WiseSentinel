@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"wisesentinel-platform/internal/domain"
+	"wisesentinel-platform/internal/observability"
 	"wisesentinel-platform/internal/pkg/apperr"
 	"wisesentinel-platform/internal/pkg/ctxkeys"
 	"wisesentinel-platform/internal/pkg/redact"
@@ -120,6 +121,14 @@ func (a *Agent) Analyze(ctx context.Context, req *domain.OpsAgentRequest) (*doma
 			return &domain.OpsAgentResponse{Status: domain.OpsTaskFailed, Result: clarification, TraceID: traceID}, nil
 		}
 	}
+	contract, err := a.newTaskContract(ctx, tenantID, userID, taskID, traceID, req)
+	if err != nil {
+		return nil, apperr.Wrap(err, apperr.ErrAgentFailed)
+	}
+	contractJSON, err := json.Marshal(contract)
+	if err != nil {
+		return nil, apperr.Wrap(err, apperr.ErrInternal)
+	}
 
 	// 1. Create the task row (pending).
 	triggerType := req.TriggerType
@@ -127,15 +136,16 @@ func (a *Agent) Analyze(ctx context.Context, req *domain.OpsAgentRequest) (*doma
 		triggerType = "manual"
 	}
 	task := &repository.OpsTask{
-		TenantID:      tenantID,
-		TaskID:        taskID,
-		TriggerType:   triggerType,
-		InputQuery:    req.Query,
-		Status:        string(domain.OpsTaskPending),
-		TraceID:       traceID,
-		ConfigVersion: runtimeConfigVersion(req.RuntimeConfig),
-		CreatedBy:     userID,
-		MaxRetry:      2,
+		TenantID:         tenantID,
+		TaskID:           taskID,
+		TriggerType:      triggerType,
+		InputQuery:       req.Query,
+		Status:           string(domain.OpsTaskPending),
+		TraceID:          traceID,
+		ConfigVersion:    runtimeConfigVersion(req.RuntimeConfig),
+		TaskContractJSON: string(contractJSON),
+		CreatedBy:        userID,
+		MaxRetry:         2,
 	}
 	if err := a.taskRepo.Create(ctx, task); err != nil {
 		return nil, apperr.Wrap(err, apperr.ErrInternal)
@@ -204,17 +214,61 @@ func (a *Agent) ExecuteTask(ctx context.Context, tenantID, taskID, executionToke
 	return a.executeTask(ctx, tenantID, taskID, traceID, executionToken, req, true)
 }
 
+func (a *Agent) newTaskContract(ctx context.Context, tenantID, userID, taskID, traceID string, req *domain.OpsAgentRequest) (domain.TaskContract, error) {
+	allowed := []string(nil)
+	if req.RuntimeConfig != nil && len(req.RuntimeConfig.Tools) > 0 {
+		allowed = append(allowed, req.RuntimeConfig.Tools...)
+	} else if a.toolGateway != nil {
+		tools, err := a.toolGateway.ListTools(ctx, tenantID, domain.AgentTypeOps)
+		if err != nil {
+			return domain.TaskContract{}, err
+		}
+		for _, tool := range tools {
+			allowed = append(allowed, tool.Name)
+		}
+	}
+	return domain.TaskContract{
+		TaskID: taskID, TenantID: tenantID, UserID: userID, Goal: req.Query,
+		AllowedTools: append(allowed, "task_complete"), CompletionCriteria: []string{"task_complete", "successful tool evidence", "all checklist items completed", "summary"},
+		RiskBudget: effectiveMaxIterations(a.maxIter, req), ConfigVersion: runtimeConfigVersion(req.RuntimeConfig), TraceID: traceID,
+	}, nil
+}
+
+func effectiveMaxIterations(fallback int, req *domain.OpsAgentRequest) int {
+	if req != nil && req.RuntimeConfig != nil && req.RuntimeConfig.MaxIterations > 0 && req.RuntimeConfig.MaxIterations < fallback {
+		return req.RuntimeConfig.MaxIterations
+	}
+	if req != nil && req.MaxIterations > 0 && req.MaxIterations < fallback {
+		return req.MaxIterations
+	}
+	return fallback
+}
+
 func (a *Agent) executeTask(ctx context.Context, tenantID, taskID, traceID, executionToken string, req *domain.OpsAgentRequest, allowRetry bool) (*domain.OpsAgentResponse, error) {
+	ctx, stop := a.watchCancellation(ctx, tenantID, taskID, executionToken)
+	defer stop()
 	startedAt := time.Now()
 	a.startTrace(ctx, traceID, tenantID, taskID, req, startedAt)
 	finishStatus := "success"
 	finishErr := ""
 	defer func() {
-		a.finishTrace(ctx, traceID, finishStatus, finishErr, time.Since(startedAt).Milliseconds())
+		// A user cancellation must still close the Trace. Preserve identity and
+		// trace values while dropping cancellation so the durable audit record is
+		// not left running or incorrectly marked failed.
+		a.finishTrace(context.WithoutCancel(ctx), traceID, finishStatus, finishErr, time.Since(startedAt).Milliseconds())
 	}()
 
-	evidence, result, detail, err := a.runAgent(ctx, tenantID, req)
+	var completion domain.TaskCompletion
+	ctx = ctxkeys.WithTaskCompletionSink(ctx, &completion)
+	evidence, result, detail, iterations, err := a.runAgent(ctx, tenantID, req)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			task, getErr := a.taskRepo.Get(context.WithoutCancel(ctx), tenantID, taskID)
+			if getErr == nil && task != nil && task.Status == string(domain.OpsTaskCancelled) {
+				finishStatus, finishErr = string(domain.OpsTaskCancelled), "task cancelled by user"
+				return &domain.OpsAgentResponse{TaskID: taskID, Status: domain.OpsTaskCancelled, Result: "task cancelled by user", TraceID: traceID, Timing: buildOpsTiming(task)}, nil
+			}
+		}
 		finishStatus = "failed"
 		finishErr = redact.Summary(err.Error(), 1000)
 		payload := redact.JSON(marshalPayload(detail, evidence, nil))
@@ -252,6 +306,37 @@ func (a *Agent) executeTask(ctx context.Context, tenantID, taskID, traceID, exec
 		return nil, apperr.Wrap(err, apperr.ErrAgentFailed)
 	}
 
+	contract := domain.TaskContract{TaskID: taskID, TenantID: tenantID, UserID: req.UserID, Goal: req.Query, RiskBudget: effectiveMaxIterations(a.maxIter, req), ConfigVersion: runtimeConfigVersion(req.RuntimeConfig), TraceID: traceID}
+	if task, getErr := a.taskRepo.Get(ctx, tenantID, taskID); getErr == nil && task != nil && strings.TrimSpace(task.TaskContractJSON) != "" {
+		_ = json.Unmarshal([]byte(task.TaskContractJSON), &contract)
+	}
+	if completion.Status == "" && len(detail) > 0 && strings.HasPrefix(detail[0], "[focused]") {
+		completion = domain.TaskCompletion{Status: "completed", Summary: result, Checklist: []domain.ChecklistItem{{Item: "successful tool evidence", Completed: true}, {Item: "summary", Completed: strings.TrimSpace(result) != ""}}}
+	}
+	decision := domain.ValidateTaskCompletion(contract, completion, evidence, iterations)
+	observability.ObserveTaskCompletionCheck(decision.Reason)
+	a.recordStep(ctx, tenantID, "completion", "task_completion", "", decision.Reason, map[bool]string{true: "success", false: "rejected"}[decision.Accepted], 0, "")
+	completionRecord, _ := json.Marshal(struct {
+		domain.TaskCompletion
+		Decision domain.CompletionDecision `json:"decision"`
+	}{completion, decision})
+	if err := a.taskRepo.SetCompletionIfOwned(ctx, tenantID, taskID, executionToken, string(completionRecord)); err != nil {
+		return nil, apperr.Wrap(err, apperr.ErrInternal)
+	}
+	if !decision.Accepted {
+		finishStatus, finishErr = string(domain.OpsTaskIncomplete), decision.Reason
+		payload := redact.JSON(marshalPayload(append(detail, "[completion] rejected: "+decision.Reason), evidence, nil))
+		finished, persistErr := a.taskRepo.FinishIfOwned(ctx, tenantID, taskID, executionToken, string(domain.OpsTaskIncomplete), decision.Reason, payload)
+		if persistErr != nil {
+			return nil, apperr.Wrap(persistErr, apperr.ErrInternal)
+		}
+		if !finished {
+			return nil, apperr.ErrAgentFailed
+		}
+		task, _ := a.taskRepo.Get(ctx, tenantID, taskID)
+		return &domain.OpsAgentResponse{TaskID: taskID, Status: domain.OpsTaskIncomplete, Result: decision.Reason, Detail: append(detail, "[completion] "+decision.Reason), TraceID: traceID, Evidence: evidence, Timing: buildOpsTiming(task)}, nil
+	}
+
 	conclusion := parseConclusion(result)
 	payload := redact.JSON(marshalPayload(detail, evidence, conclusion))
 	finished, persistErr := a.taskRepo.FinishIfOwned(ctx, tenantID, taskID, executionToken,
@@ -280,8 +365,55 @@ func (a *Agent) executeTask(ctx context.Context, tenantID, taskID, traceID, exec
 	}, nil
 }
 
+func (a *Agent) watchCancellation(parent context.Context, tenantID, taskID, token string) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	go func() {
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				task, err := a.taskRepo.Get(context.WithoutCancel(ctx), tenantID, taskID)
+				if err == nil && (task == nil || task.Status == string(domain.OpsTaskCancelled) || task.ExecutionToken != token) {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return ctx, cancel
+}
+
+// CancelTask is idempotent for an already-cancelled task and refuses terminal
+// completed tasks, preserving final-state integrity.
+func (a *Agent) CancelTask(ctx context.Context, tenantID, taskID string) (domain.OpsTaskStatus, error) {
+	task, err := a.taskRepo.Get(ctx, tenantID, taskID)
+	if err != nil {
+		return "", apperr.Wrap(err, apperr.ErrInternal)
+	}
+	if task == nil {
+		return "", apperr.ErrNotFound
+	}
+	if task.Status == string(domain.OpsTaskCancelled) {
+		return domain.OpsTaskCancelled, nil
+	}
+	if task.Status == string(domain.OpsTaskSuccess) || task.Status == string(domain.OpsTaskFailed) || task.Status == string(domain.OpsTaskTimeout) || task.Status == string(domain.OpsTaskIncomplete) {
+		return "", apperr.ErrBadRequest
+	}
+	changed, err := a.taskRepo.Cancel(ctx, tenantID, taskID)
+	if err != nil {
+		return "", apperr.Wrap(err, apperr.ErrInternal)
+	}
+	if !changed {
+		return "", apperr.ErrAgentFailed
+	}
+	return domain.OpsTaskCancelled, nil
+}
+
 // runAgent builds and runs the Plan-Execute-Replan graph.
-func (a *Agent) runAgent(ctx context.Context, tenantID string, req *domain.OpsAgentRequest) ([]domain.Evidence, string, []string, error) {
+func (a *Agent) runAgent(ctx context.Context, tenantID string, req *domain.OpsAgentRequest) ([]domain.Evidence, string, []string, int, error) {
 	// Attach a tool-call sink so the Tool Gateway records every tool invocation
 	// as structured evidence for the Portal proof chain.
 	var evidence []domain.Evidence
@@ -292,22 +424,19 @@ func (a *Agent) runAgent(ctx context.Context, tenantID string, req *domain.OpsAg
 	// 1. Build planner / executor / replanner.
 	plannerAgent, err := NewPlanner(ctx, a.modelRouter)
 	if err != nil {
-		return nil, "", nil, apperr.Wrap(err, apperr.ErrAgentFailed)
+		return nil, "", nil, 0, apperr.Wrap(err, apperr.ErrAgentFailed)
 	}
 	executorAgent, err := NewExecutor(ctx, a.modelRouter, a.toolGateway, tenantID)
 	if err != nil {
-		return nil, "", nil, apperr.Wrap(err, apperr.ErrAgentFailed)
+		return nil, "", nil, 0, apperr.Wrap(err, apperr.ErrAgentFailed)
 	}
 	replannerAgent, err := NewReplanner(ctx, a.modelRouter)
 	if err != nil {
-		return nil, "", nil, apperr.Wrap(err, apperr.ErrAgentFailed)
+		return nil, "", nil, 0, apperr.Wrap(err, apperr.ErrAgentFailed)
 	}
 
 	// 2. Wire the plan-execute-replan agent.
-	maxIterations := a.maxIter
-	if req.RuntimeConfig != nil && req.RuntimeConfig.MaxIterations > 0 && req.RuntimeConfig.MaxIterations < maxIterations {
-		maxIterations = req.RuntimeConfig.MaxIterations
-	}
+	maxIterations := effectiveMaxIterations(a.maxIter, req)
 	planExecuteAgent, err := planexecute.New(ctx, &planexecute.Config{
 		Planner:       plannerAgent,
 		Executor:      executorAgent,
@@ -315,7 +444,7 @@ func (a *Agent) runAgent(ctx context.Context, tenantID string, req *domain.OpsAg
 		MaxIterations: maxIterations,
 	})
 	if err != nil {
-		return nil, "", nil, apperr.Wrap(err, apperr.ErrAgentFailed)
+		return nil, "", nil, 0, apperr.Wrap(err, apperr.ErrAgentFailed)
 	}
 
 	// 3. Run via the ADK Runner.
@@ -326,13 +455,14 @@ func (a *Agent) runAgent(ctx context.Context, tenantID string, req *domain.OpsAg
 		query = defaultOpsQuery
 	}
 	if evidence, result, detail, handled, err := a.runFocusedTool(ctx, tenantID, query); handled {
-		return evidence, result, detail, err
+		return evidence, result, detail, 1, err
 	}
 
 	iter := runner.Query(ctx, query)
 	var (
 		result      string
 		detail      []string
+		iterations  int
 		lastMessage adk.Message
 	)
 	for {
@@ -343,6 +473,7 @@ func (a *Agent) runAgent(ctx context.Context, tenantID string, req *domain.OpsAg
 		if event == nil {
 			continue
 		}
+		iterations++
 		if event.Err != nil {
 			errText := redact.Summary(event.Err.Error(), 1000)
 			g.Log().Errorf(ctx, "ops agent event error: %s", errText)
@@ -351,7 +482,7 @@ func (a *Agent) runAgent(ctx context.Context, tenantID string, req *domain.OpsAg
 			// A graph/model failure is not an evidence-free successful diagnosis.
 			// In particular, preserve the stable overload error so callers can
 			// distinguish capacity shedding from a completed Ops task.
-			return evidence, "", detail, normalizeOpsEventError(event.Err)
+			return evidence, "", detail, iterations, normalizeOpsEventError(event.Err)
 		}
 		if event.Output != nil {
 			msg, _, mErr := adk.GetMessage(event)
@@ -367,10 +498,10 @@ func (a *Agent) runAgent(ctx context.Context, tenantID string, req *domain.OpsAg
 	if lastMessage == nil {
 		fallbackResult := buildFallbackConclusion(req.Query, detail, evidence)
 		detail = append(detail, "[fallback] Agent 未能产生最终文本输出，已基于已采集证据生成阶段一兜底结论")
-		return evidence, fallbackResult, detail, nil
+		return evidence, fallbackResult, detail, iterations, nil
 	}
 	result = lastMessage.Content
-	return evidence, result, detail, nil
+	return evidence, result, detail, iterations, nil
 }
 
 func isModelOverloadedError(err error) bool {

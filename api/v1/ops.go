@@ -77,6 +77,15 @@ type GetOpsTaskRes struct {
 	Timing     *OpsTiming          `json:"timing,omitempty"`
 }
 
+type CancelOpsTaskReq struct {
+	g.Meta `path:"/ops/tasks/{task_id}/cancel" method:"post" tags:"Ops" summary:"取消 Ops 任务"`
+	TaskID string `json:"task_id" in:"path" v:"required"`
+}
+type CancelOpsTaskRes struct {
+	TaskID string `json:"task_id"`
+	Status string `json:"status"`
+}
+
 // AlertWebhookReq receives Alertmanager webhook events.
 type AlertWebhookReq struct {
 	g.Meta            `path:"/webhook/alerts" method:"post" tags:"Ops" summary:"告警 Webhook 接入"`

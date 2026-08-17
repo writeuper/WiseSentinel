@@ -64,6 +64,10 @@ func buildSystemPromptWithBase(base, now, documents string) string {
 		"- 当你需要查询数据时，必须通过 function calling 协议调用工具，由系统自动执行。不得在回答中用文字描述\"我会调用 XX 工具\"或\"<工具调用> XX\"，这些描述不会被系统执行\n" +
 		"- 调用工具后，你会收到系统返回的工具执行结果，基于该结果继续推理或生成最终回答\n" +
 		"- 如果你不需要查询任何数据，直接基于已有知识回答即可，无需调用工具\n\n" +
+		"任务完成规则（重要）：\n" +
+		"- 当工具列表中存在 task_complete 时，只有在已获得成功的工具结果或有效 citation 证据后，才能结束本次任务\n" +
+		"- 在输出最终回答前，必须恰好调用一次 task_complete，并传入 status=completed、非空 summary，以及所有 checklist 项均为 completed=true 的 checklist\n" +
+		"- task_complete 只是提交完成提议；不得把它当作外部操作，也不得在证据缺失、工具失败或检查项未完成时调用 completed\n\n" +
 		"当前时间：" + now + "\n相关文档：\n" + documents
 }
 

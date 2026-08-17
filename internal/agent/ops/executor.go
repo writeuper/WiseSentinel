@@ -39,6 +39,9 @@ func NewExecutor(ctx context.Context, modelRouter domain.ModelRouter, toolGatewa
 	if err != nil {
 		return nil, fmt.Errorf("list ops tools: %w", err)
 	}
+	// Completion is a runtime control-plane tool, not a Gateway adapter: it
+	// cannot cause an external side effect and is reviewed after the graph ends.
+	einoTools = append(einoTools, taskCompleteTool{})
 
 	// 3. Build the executor. Wrap the model so each executor step forces a
 	//    tool call — Volces Ark and similar OpenAI-compatible providers do not

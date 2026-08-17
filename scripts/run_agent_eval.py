@@ -568,6 +568,16 @@ def check_knowledge(expected_knowledge: str, actual_output: str) -> Tuple[bool, 
 def classify_failure(route_ok: bool, tools_ok: bool, knowledge_ok: bool, keywords_ok: bool, error: str) -> str:
     if error:
         lower_error = error.lower()
+        # A completion contract rejection is intentional platform control-plane
+        # behavior. Keep it in the Agent-quality denominator; treating its HTTP
+        # 422 envelope as infrastructure hides tool/completion non-compliance.
+        if "40011" in lower_error or "chat task incomplete" in lower_error or "task incomplete" in lower_error:
+            return "completion_rejected"
+        # HTTP 402 is an upstream entitlement/billing condition. It cannot be
+        # repaired by Prompt or Agent changes and must remain separate from a
+        # generic HTTP/service fault in a model selection report.
+        if "http 402" in lower_error or "\"code\":402" in lower_error or "'code': 402" in lower_error:
+            return "provider_entitlement"
         if "429" in lower_error or "rate limit" in lower_error or "请求过于频繁" in error:
             return "rate_limited"
         if ("timed out" in lower_error or "timeout" in lower_error or
@@ -587,7 +597,7 @@ def classify_failure(route_ok: bool, tools_ok: bool, knowledge_ok: bool, keyword
 
 
 def optimization_action(bad_case: str) -> str:
-    return {"route_error": "调整路由规则、告警关键词或 RAG 置信度策略", "tool_missing": "优化 Planner Prompt 和工具 description，明确该场景应调用的工具", "forbidden_tool_called": "检查工具 Allowlist、tool_choice 策略和请求场景约束", "evidence_source_miss": "检查真实数据源标识、工具输出和 Evidence 记录", "trace_unavailable": "检查 trace_id 传播、Trace API 可用性和 tool Step 埋点",  "keyword_miss": "优化结论模板、工具返回格式或 Prompt 证据引用约束", "knowledge_miss": "检查 RAG 索引状态、citation 来源和知识库文档质量", "timeout": "降低 max_iterations，检查模型和工具超时配置", "http_error": "检查服务状态、鉴权配置、接口路径和依赖组件", "rate_limited": "降低评测速率或增加请求间隔，检查服务限流配置", "skipped": "补充对应 HTTP 入口后纳入自动评测"}.get(bad_case, "")
+    return {"route_error": "调整路由规则、告警关键词或 RAG 置信度策略", "tool_missing": "优化 Planner Prompt 和工具 description，明确该场景应调用的工具", "completion_rejected": "检查 task_complete Prompt、工具 schema 与完成证据是否满足任务合同", "forbidden_tool_called": "检查工具 Allowlist、tool_choice 策略和请求场景约束", "evidence_source_miss": "检查真实数据源标识、工具输出和 Evidence 记录", "trace_unavailable": "检查 trace_id 传播、Trace API 可用性和 tool Step 埋点",  "keyword_miss": "优化结论模板、工具返回格式或 Prompt 证据引用约束", "knowledge_miss": "检查 RAG 索引状态、citation 来源和知识库文档质量", "timeout": "降低 max_iterations，检查模型和工具超时配置", "provider_entitlement": "检查该模型的账单额度、模型授权和服务端点；不要将其计为模型能力失败", "http_error": "检查服务状态、鉴权配置、接口路径和依赖组件", "rate_limited": "降低评测速率或增加请求间隔，检查服务限流配置", "skipped": "补充对应 HTTP 入口后纳入自动评测"}.get(bad_case, "")
 
 
 def run_case(client: EvalClient, row: Dict[str, str], args: argparse.Namespace) -> Dict[str, str]:
@@ -675,7 +685,7 @@ def build_metrics(rows: List[Dict[str, str]]) -> Dict[str, Any]:
     # A 429/504/HTTP failure proves a capacity or dependency problem, not a
     # route/tool/Citation assertion failure. Report both views so an evaluation
     # cannot hide availability regressions or mislabel them as model quality.
-    infrastructure_failures = {"rate_limited", "timeout", "http_error"}
+    infrastructure_failures = {"rate_limited", "timeout", "http_error", "provider_entitlement"}
     business_rows = [row for row in executable if row.get("bad_case") not in infrastructure_failures]
     business_passed = [row for row in business_rows if row.get("passed") == "Y"]
     route_ok = [row for row in executable if row.get("actual_route") == row.get("expected_route")]

@@ -9,18 +9,19 @@ import (
 type ctxKey string
 
 const (
-	TenantID     ctxKey = "tenant_id"
-	UserID       ctxKey = "user_id"
-	TraceID      ctxKey = "trace_id"
-	Roles        ctxKey = "roles"
-	AuthMethod   ctxKey = "auth_method"
-	AuthKeyID    ctxKey = "auth_key_id"
-	Scopes       ctxKey = "scopes"
-	SessionID    ctxKey = "session_id"
-	ToolSink     ctxKey = "tool_sink" // *[]domain.Evidence, populated by Gateway.Invoke
-	StepSink     ctxKey = "step_sink" // StepSinkFunc, populated by Agent runtime
-	RequestQuery ctxKey = "request_query"
-	WebhookBody  ctxKey = "webhook_body"
+	TenantID           ctxKey = "tenant_id"
+	UserID             ctxKey = "user_id"
+	TraceID            ctxKey = "trace_id"
+	Roles              ctxKey = "roles"
+	AuthMethod         ctxKey = "auth_method"
+	AuthKeyID          ctxKey = "auth_key_id"
+	Scopes             ctxKey = "scopes"
+	SessionID          ctxKey = "session_id"
+	ToolSink           ctxKey = "tool_sink" // *[]domain.Evidence, populated by Gateway.Invoke
+	StepSink           ctxKey = "step_sink" // StepSinkFunc, populated by Agent runtime
+	RequestQuery       ctxKey = "request_query"
+	WebhookBody        ctxKey = "webhook_body"
+	TaskCompletionSink ctxKey = "task_completion_sink"
 )
 
 // StepSinkFunc records one Agent trace step.
@@ -134,5 +135,14 @@ func WithStepSink(ctx context.Context, sink StepSinkFunc) context.Context {
 
 func StepSinkFrom(ctx context.Context) StepSinkFunc {
 	v, _ := ctx.Value(StepSink).(StepSinkFunc)
+	return v
+}
+
+func WithTaskCompletionSink(ctx context.Context, sink *domain.TaskCompletion) context.Context {
+	return context.WithValue(ctx, TaskCompletionSink, sink)
+}
+
+func TaskCompletionSinkFrom(ctx context.Context) *domain.TaskCompletion {
+	v, _ := ctx.Value(TaskCompletionSink).(*domain.TaskCompletion)
 	return v
 }

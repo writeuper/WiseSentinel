@@ -66,7 +66,7 @@ func normalizeOpsStage(stage string) string {
 
 func normalizeOpsStatus(status string) string {
 	switch strings.TrimSpace(status) {
-	case "pending", "running", "success", "failed", "timeout", "retrying", "abandoned":
+	case "pending", "running", "success", "failed", "timeout", "retrying", "abandoned", "incomplete", "cancelled":
 		return strings.TrimSpace(status)
 	default:
 		return "other"

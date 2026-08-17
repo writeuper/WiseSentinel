@@ -200,6 +200,8 @@ CREATE TABLE IF NOT EXISTS ws_ops_task (
     status        VARCHAR(32)  NOT NULL DEFAULT 'pending',
     trace_id      VARCHAR(64)  NOT NULL DEFAULT '',
     config_version VARCHAR(64) NOT NULL DEFAULT '' COMMENT 'Agent config snapshot selected at task submission',
+	 task_contract_json JSON COMMENT 'immutable stage-1 execution boundary',
+	 completion_json JSON COMMENT 'completion proposal and runtime decision',
     created_by    VARCHAR(64)  NOT NULL DEFAULT '',
     started_at    DATETIME,
     finished_at   DATETIME,

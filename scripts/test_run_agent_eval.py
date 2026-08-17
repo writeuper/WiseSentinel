@@ -135,6 +135,23 @@ class EvalSessionCleanupTests(unittest.TestCase):
     def test_classifies_rate_limit_before_timeout(self) -> None:
         self.assertEqual(MODULE.classify_failure(False, False, False, False, "HTTP 429 请求过于频繁"), "rate_limited")
 
+    def test_classifies_completion_rejection_as_agent_quality_failure(self) -> None:
+        self.assertEqual(
+            MODULE.classify_failure(False, False, False, False, "API error /chat: {'code': 40011, 'message': 'chat task incomplete: tool_missing'}"),
+            "completion_rejected",
+        )
+        metrics = MODULE.build_metrics([{"actual_route": "error", "expected_route": "chat", "passed": "N", "bad_case": "completion_rejected"}])
+        self.assertEqual(metrics["infrastructure_failure_cases"], 0)
+        self.assertEqual(metrics["business_cases"], 1)
+
+    def test_classifies_model_entitlement_as_infrastructure_failure(self) -> None:
+        self.assertEqual(
+            MODULE.classify_failure(False, False, False, False, "HTTP 500 /chat: LLM HTTP 402 request_id=redacted"),
+            "provider_entitlement",
+        )
+        metrics = MODULE.build_metrics([{"actual_route": "error", "expected_route": "chat", "passed": "N", "bad_case": "provider_entitlement"}])
+        self.assertEqual(metrics["infrastructure_failure_cases"], 1)
+
     def test_evidence_source_requires_all_pipe_delimited_sources(self) -> None:
         output = '{"source": "prometheus"} {"source": "logs"}'
         self.assertTrue(MODULE.check_evidence_source("prometheus|logs", output))

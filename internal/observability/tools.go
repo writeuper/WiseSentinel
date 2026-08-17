@@ -16,9 +16,25 @@ var (
 		Help:    "Tool gateway execution latency by bounded tool, agent and outcome.",
 		Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30},
 	}, []string{"tool", "agent", "outcome"})
+	taskCompletionChecks = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "ws_task_completion_checks_total", Help: "Agent task completion checks by bounded outcome.",
+	}, []string{"outcome"})
 )
 
-func init() { Registry.MustRegister(toolCalls, toolCallDuration) }
+func init() { Registry.MustRegister(toolCalls, toolCallDuration, taskCompletionChecks) }
+
+func ObserveTaskCompletionCheck(outcome string) {
+	taskCompletionChecks.WithLabelValues(boundedCompletionOutcome(outcome)).Inc()
+}
+
+func boundedCompletionOutcome(v string) string {
+	switch strings.TrimSpace(v) {
+	case "accepted", "tool_missing", "task_incomplete", "budget_exceeded", "scope_violation":
+		return strings.TrimSpace(v)
+	default:
+		return "task_incomplete"
+	}
+}
 
 // ObserveToolCall normalizes labels before export so an attacker-controlled
 // tool name, agent type or error string cannot create unbounded Prometheus

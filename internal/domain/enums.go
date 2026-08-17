@@ -50,6 +50,8 @@ const (
 	OpsTaskSuccess          OpsTaskStatus = "success"
 	OpsTaskFailed           OpsTaskStatus = "failed"
 	OpsTaskAwaitingApproval OpsTaskStatus = "awaiting_approval"
+	OpsTaskIncomplete       OpsTaskStatus = "incomplete"
+	OpsTaskCancelled        OpsTaskStatus = "cancelled"
 )
 
 // ApprovalStatus tracks human-in-the-loop approval state.

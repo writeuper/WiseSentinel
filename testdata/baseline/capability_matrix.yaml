@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0",
+  "baseline_date": "2026-08-17",
+  "purpose": "阶段0能力基线：以当前代码、配置和自动化测试为事实来源，不替代发布验收。",
+  "source_of_truth": [
+    {"path": "manifest/config/config.yaml", "purpose": "运行时模型、工具、MCP与限流配置"},
+    {"path": "internal/agent", "purpose": "Chat 与 Ops Agent Runtime 实现"},
+    {"path": "internal/toolkit", "purpose": "工具网关、风险分级和 MCP 策略"},
+    {"path": "internal/rag", "purpose": "索引、检索、过滤和代际隔离"},
+    {"path": "internal/repository", "purpose": "持久化围栏、Trace 与任务状态"}
+  ],
+  "capabilities": [
+    {"id":"CHAT_REACT","domain":"chat","name":"Chat ReAct 工具编排","status":"implemented","evidence":{"code":["internal/agent/chat/agent.go"],"tests":["internal/agent/chat/agent_test.go"]},"acceptance":["聊天运行时可注册工具并记录 Trace"],"gaps":[]},
+    {"id":"CHAT_CONTRACT","domain":"chat","name":"Chat 任务完成声明与证据校验","status":"implemented","evidence":{"code":["internal/agent/chat/task_complete.go","internal/domain/task_contract.go"],"tests":["internal/agent/chat/task_complete_test.go","internal/domain/task_contract_test.go"]},"acceptance":["无有效完成声明不得作为 clean completion"],"gaps":[]},
+    {"id":"CHAT_IDEMPOTENCY","domain":"chat","name":"聊天轮次幂等与流式取消围栏","status":"implemented","evidence":{"code":["internal/repository/chat_turn.go"],"tests":["internal/repository/chat_turn_integration_test.go","internal/agent/chat/agent_test.go"]},"acceptance":["同一租户、用户、会话的 turn claim 受围栏保护"],"gaps":[]},
+    {"id":"OPS_RUNTIME","domain":"ops","name":"Ops Plan-Execute-Replan Runtime","status":"implemented","evidence":{"code":["internal/agent/ops/agent.go","internal/agent/ops/executor.go"],"tests":["internal/agent/ops/agent_boundary_test.go","internal/agent/ops/conclusion_test.go"]},"acceptance":["Planner、Executor、Replanner 责任分离"],"gaps":[]},
+    {"id":"OPS_COMPLETION","domain":"ops","name":"Ops Task Contract 与 task_complete","status":"implemented","evidence":{"code":["internal/agent/ops/task_complete.go","internal/domain/task_contract.go"],"tests":["internal/agent/ops/task_complete_test.go","internal/domain/task_contract_test.go"]},"acceptance":["缺少必需证据时任务进入 incomplete"],"gaps":[]},
+    {"id":"OPS_FENCE","domain":"ops","name":"Ops 租约、重试、超时与取消写入围栏","status":"implemented","evidence":{"code":["internal/repository/ops_task.go"],"tests":["internal/repository/ops_task_integration_test.go"]},"acceptance":["过期 execution token 不可覆盖取消或新执行结果"],"gaps":[]},
+    {"id":"TOOL_ALLOWLIST","domain":"tool_gateway","name":"按 Agent 的工具 allowlist","status":"implemented","evidence":{"code":["internal/toolkit/gateway.go","manifest/config/config.yaml"],"tests":["internal/toolkit/gateway_test.go"]},"acceptance":["未知、禁用或越权工具必须拒绝"],"gaps":[]},
+    {"id":"TOOL_RISK","domain":"tool_gateway","name":"L0/L1/L2 工具风险分级","status":"implemented","evidence":{"code":["internal/toolkit/gateway.go","manifest/config/config.yaml"],"tests":["internal/toolkit/gateway_l2_test.go"]},"acceptance":["L2 没有持久化工作流时 fail-closed"],"gaps":[]},
+    {"id":"MCP_POLICY","domain":"tool_gateway","name":"MCP 命令、参数、环境与能力约束","status":"implemented","evidence":{"code":["internal/toolkit/mcp/stdio_client.go"],"tests":["internal/toolkit/mcp/stdio_client_test.go","internal/toolkit/mcp/time_adapter_test.go"]},"acceptance":["仅允许配置的绝对命令和工具集"],"gaps":[]},
+    {"id":"TOOL_REDACTION","domain":"tool_gateway","name":"工具遥测脱敏","status":"implemented","evidence":{"code":["internal/observability/tools.go"],"tests":["internal/toolkit/gateway_redact_test.go"]},"acceptance":["敏感调用体不得直接进入观测投影"],"gaps":[]},
+    {"id":"RAG_FILTER","domain":"rag","name":"RAG 租户、可见性、密级过滤","status":"implemented","evidence":{"code":["internal/rag/filter/filter.go","internal/rag/retriever/milvus.go"],"tests":["internal/rag/filter/filter_test.go","internal/rag/rag_integration_test.go"]},"acceptance":["检索表达式必须带租户及访问范围限制"],"gaps":[]},
+    {"id":"RAG_GENERATION","domain":"rag","name":"RAG staged generation 与 active generation 读围栏","status":"implemented","evidence":{"code":["internal/rag/indexer/milvus.go","internal/repository/document_index_state.go"],"tests":["internal/rag/indexer/generation_test.go","internal/repository/document_index_state_integration_test.go"]},"acceptance":["未发布、删除或过期代际不可被读取"],"gaps":[]},
+    {"id":"RAG_GC","domain":"rag","name":"向量 GC outbox 与租约围栏","status":"implemented","evidence":{"code":["internal/repository/vector_gc.go"],"tests":["internal/repository/vector_gc_error_test.go"]},"acceptance":["GC 失败可重试且不跨租户删除"],"gaps":[]},
+    {"id":"TRACE_EVIDENCE","domain":"trace","name":"Trace、工具证据与引用投影","status":"implemented","evidence":{"code":["internal/repository/agent_trace.go","internal/observability/trace.go"],"tests":["internal/repository/agent_trace_test.go","internal/gateway/handler/trace_projection_test.go"]},"acceptance":["Trace 可关联任务、模型、工具与引用"],"gaps":[]},
+    {"id":"IDENTITY_RBAC","domain":"security","name":"租户身份绑定与 RBAC","status":"implemented","evidence":{"code":["internal/gateway/middleware/auth.go","internal/gateway/handler/controller.go"],"tests":["internal/gateway/middleware/auth_test.go","internal/gateway/handler/authorization_test.go"]},"acceptance":["请求参数不能覆盖 JWT 或 API Key 的租户身份"],"gaps":[]},
+    {"id":"SESSION_MEMORY","domain":"memory","name":"会话短期记忆","status":"implemented","evidence":{"code":["internal/memory/redis_store.go","manifest/config/config.yaml"],"tests":["internal/agent/chat/context_test.go"]},"acceptance":["会话窗口和 TTL 由配置限定"],"gaps":[]},
+    {"id":"APPROVAL_WORKFLOW","domain":"security","name":"审批持久化工作流","status":"partial","evidence":{"code":["internal/repository/approval.go"],"tests":["internal/repository/approval_integration_test.go"]},"acceptance":["审批评论持久化时脱敏"],"gaps":["尚未接入 L2 写工具的安全执行闭环"]},
+    {"id":"MODEL_ADMISSION","domain":"runtime","name":"模型 Profile 与并发准入","status":"partial","evidence":{"code":["manifest/config/config.yaml"],"tests":["internal/agent/ops/agent_overload_test.go"]},"acceptance":["配置定义共享上游并发预算"],"gaps":["默认 API Key/Base URL 为空，真实 Provider E2E 未验证"]},
+    {"id":"LONG_TERM_MEMORY","domain":"memory","name":"长期记忆与用户画像","status":"not_implemented","evidence":{"code":[],"tests":[]},"acceptance":[],"gaps":["当前仅有短期会话记忆"]},
+    {"id":"SANDBOX_EXECUTOR","domain":"tool_gateway","name":"Shell/Browser/Code 沙箱执行器","status":"not_implemented","evidence":{"code":[],"tests":[]},"acceptance":[],"gaps":["没有可授权的隔离执行环境或资源级策略执行器"]},
+    {"id":"LLM_E2E_EVAL","domain":"quality","name":"真实外部 LLM Provider 端到端评测","status":"not_implemented","evidence":{"code":[],"tests":[]},"acceptance":[],"gaps":["默认配置不含 Provider 凭据；本基线仅验证确定性单元/集成路径"]}
+  ]
+}

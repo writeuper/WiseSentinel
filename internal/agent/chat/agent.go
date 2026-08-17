@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"wisesentinel-platform/internal/domain"
+	"wisesentinel-platform/internal/observability"
 	"wisesentinel-platform/internal/pkg/apperr"
 	"wisesentinel-platform/internal/pkg/ctxkeys"
 	"wisesentinel-platform/internal/pkg/redact"
@@ -246,6 +247,19 @@ func (a *Agent) Invoke(ctx context.Context, req *domain.ChatAgentRequest) (*doma
 	ctx = ctxkeys.WithStepSink(ctx, func(stepType, stepName, input, output, status string, latencyMS int64, errMsg string) {
 		a.recordStep(ctx, traceID, req, stepType, stepName, input, output, status, latencyMS, errMsg)
 	})
+	var evidence []domain.Evidence
+	ctx = ctxkeys.WithToolSink(ctx, &evidence)
+	var completion domain.TaskCompletion
+	ctx = ctxkeys.WithTaskCompletionSink(ctx, &completion)
+	var chatContract *domain.TaskContract
+	if req.Options.EnableTools {
+		contract, contractErr := a.newChatTaskContract(ctx, req, traceID)
+		if contractErr != nil {
+			return nil, apperr.Wrap(contractErr, apperr.ErrAgentFailed)
+		}
+		chatContract = &contract
+		a.recordStep(ctx, traceID, req, "task_contract", "created", "", fmt.Sprintf("tools=%d budget=%d", len(contract.AllowedTools), contract.RiskBudget), "success", 0, "")
+	}
 	finishStatus := "success"
 	finishErr := ""
 	defer func() {
@@ -310,6 +324,28 @@ func (a *Agent) Invoke(ctx context.Context, req *domain.ChatAgentRequest) (*doma
 		return nil, apperr.Wrap(err, apperr.ErrAgentFailed)
 	}
 	a.recordStep(ctx, traceID, req, "model", "generate", req.Query, result.Content, "success", time.Since(modelStart).Milliseconds(), "")
+	if req.Options.EnableTools {
+		if completion.Status == "" {
+			completion = domain.TaskCompletion{Summary: result.Content}
+			completionEvidence := append(evidence, citationEvidence(citations)...)
+			if canRepairMissingCompletion(*chatContract, completionEvidence) {
+				repairStarted := time.Now()
+				if repairErr := a.requestMissingTaskCompletion(ctx); repairErr != nil {
+					a.recordStep(ctx, traceID, req, "completion_repair", "force_task_complete", "", "", "error", time.Since(repairStarted).Milliseconds(), repairErr.Error())
+				} else {
+					a.recordStep(ctx, traceID, req, "completion_repair", "force_task_complete", "", "", "success", time.Since(repairStarted).Milliseconds(), "")
+				}
+			}
+		}
+		decision := domain.ValidateTaskCompletion(*chatContract, completion, append(evidence, citationEvidence(citations)...), runtimeMaxSteps(req.RuntimeConfig, maxStep))
+		observability.ObserveTaskCompletionCheck(decision.Reason)
+		a.recordStep(ctx, traceID, req, "completion", "task_complete", "", decision.Reason, map[bool]string{true: "success", false: "rejected"}[decision.Accepted], 0, "")
+		if !decision.Accepted {
+			finishStatus = "incomplete"
+			finishErr = decision.Reason
+			return nil, apperr.New(40011, 422, "chat task incomplete: "+decision.Reason)
+		}
+	}
 
 	return &domain.ChatAgentResponse{
 		SessionID: req.SessionID,
@@ -362,6 +398,22 @@ func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domai
 		ctx = ctxkeys.WithStepSink(ctx, func(stepType, stepName, input, output, status string, latencyMS int64, errMsg string) {
 			a.recordStep(ctx, traceID, req, stepType, stepName, input, output, status, latencyMS, errMsg)
 		})
+		var evidence []domain.Evidence
+		ctx = ctxkeys.WithToolSink(ctx, &evidence)
+		var completion domain.TaskCompletion
+		ctx = ctxkeys.WithTaskCompletionSink(ctx, &completion)
+		var chatContract *domain.TaskContract
+		if req.Options.EnableTools {
+			contract, contractErr := a.newChatTaskContract(ctx, req, traceID)
+			if contractErr != nil {
+				streamStatus = "failed"
+				streamErr = contractErr.Error()
+				r.send("error", "任务契约初始化失败，请稍后重试。")
+				return
+			}
+			chatContract = &contract
+			a.recordStep(ctx, traceID, req, "task_contract", "created", "", fmt.Sprintf("tools=%d budget=%d", len(contract.AllowedTools), contract.RiskBudget), "success", 0, "")
+		}
 
 		// Check if context is already cancelled.
 		select {
@@ -490,6 +542,7 @@ func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domai
 			}
 		}()
 
+		var streamedAnswer strings.Builder
 		for {
 			select {
 			case <-ctx.Done():
@@ -507,11 +560,36 @@ func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domai
 						streamErr = recvErr.Error()
 						g.Log().Errorf(ctx, "ChatAgent.Stream provider recv failed trace_id=%s", traceID)
 						r.send("error", streamErrorData(recvErr, "模型流式响应中断，请稍后重试。"))
+						return
+					}
+					if req.Options.EnableTools {
+						if completion.Status == "" {
+							completion = domain.TaskCompletion{Summary: streamedAnswer.String()}
+							completionEvidence := append(evidence, citationEvidence(citations)...)
+							if canRepairMissingCompletion(*chatContract, completionEvidence) {
+								repairStarted := time.Now()
+								if repairErr := a.requestMissingTaskCompletion(ctx); repairErr != nil {
+									a.recordStep(ctx, traceID, req, "completion_repair", "force_task_complete", "", "", "error", time.Since(repairStarted).Milliseconds(), repairErr.Error())
+								} else {
+									a.recordStep(ctx, traceID, req, "completion_repair", "force_task_complete", "", "", "success", time.Since(repairStarted).Milliseconds(), "")
+								}
+							}
+						}
+						decision := domain.ValidateTaskCompletion(*chatContract, completion, append(evidence, citationEvidence(citations)...), runtimeMaxSteps(req.RuntimeConfig, maxStep))
+						observability.ObserveTaskCompletionCheck(decision.Reason)
+						a.recordStep(ctx, traceID, req, "completion", "task_complete", "", decision.Reason, map[bool]string{true: "success", false: "rejected"}[decision.Accepted], 0, "")
+						if !decision.Accepted {
+							streamStatus = "incomplete"
+							streamErr = decision.Reason
+							r.send("error", "任务未满足完成条件："+decision.Reason)
+							return
+						}
 					}
 					r.send("done", fmt.Sprintf(`{"trace_id":"%s"}`, traceID))
 					return
 				}
 				if msg.Content != "" {
+					streamedAnswer.WriteString(msg.Content)
 					r.send("message", msg.Content)
 				}
 			}
@@ -609,6 +687,9 @@ func (a *Agent) buildReActAgent(ctx context.Context, req *domain.ChatAgentReques
 			}
 		}
 	}
+	if req.Options.EnableTools {
+		einoTools = append(einoTools, taskCompleteTool{})
+	}
 
 	// 3. Build system prompt using ChatTemplate
 	customPrompt := ""
@@ -634,6 +715,36 @@ func (a *Agent) buildReActAgent(ctx context.Context, req *domain.ChatAgentReques
 	}
 
 	return agent, nil
+}
+
+func (a *Agent) newChatTaskContract(ctx context.Context, req *domain.ChatAgentRequest, traceID string) (domain.TaskContract, error) {
+	tenantID := req.TenantID
+	if tenantID == "" {
+		tenantID = ctxkeys.TenantIDFrom(ctx)
+	}
+	allowed := []string{"task_complete", "citation"}
+	if req.RuntimeConfig != nil && len(req.RuntimeConfig.Tools) > 0 {
+		allowed = append(allowed, req.RuntimeConfig.Tools...)
+	} else if a.toolGateway != nil {
+		tools, err := a.toolGateway.ListTools(ctx, tenantID, domain.AgentTypeChat)
+		if err != nil {
+			return domain.TaskContract{}, err
+		}
+		for _, meta := range tools {
+			allowed = append(allowed, meta.Name)
+		}
+	}
+	return domain.TaskContract{TaskID: "chat:" + req.SessionID, TenantID: tenantID, UserID: req.UserID, Goal: req.Query, AllowedTools: allowed, CompletionCriteria: []string{"task_complete", "successful tool or citation evidence"}, RiskBudget: runtimeMaxSteps(req.RuntimeConfig, maxStep), ConfigVersion: runtimeConfigVersion(req.RuntimeConfig), TraceID: traceID}, nil
+}
+
+func citationEvidence(citations []domain.Citation) []domain.Evidence {
+	result := make([]domain.Evidence, 0, len(citations))
+	for _, citation := range citations {
+		if citation.DocID != "" {
+			result = append(result, domain.Evidence{ToolName: "citation", Status: "success"})
+		}
+	}
+	return result
 }
 
 // buildInputMessages builds the []*schema.Message from the user request.

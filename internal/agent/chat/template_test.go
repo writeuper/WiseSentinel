@@ -10,7 +10,7 @@ import (
 func TestChatTemplateUsesConfiguredPromptButRetainsSafetyRules(t *testing.T) {
 	prompt := NewChatTemplate("doc context", "你是订单平台专属助手")
 	got := prompt.BuildSystemPromptStatic("fixed-now")
-	for _, want := range []string{"你是订单平台专属助手", "工具调用失败时说明工具失败原因", "doc context", "fixed-now"} {
+	for _, want := range []string{"你是订单平台专属助手", "工具调用失败时说明工具失败原因", "必须恰好调用一次 task_complete", "doc context", "fixed-now"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("system prompt missing %q: %s", want, got)
 		}
