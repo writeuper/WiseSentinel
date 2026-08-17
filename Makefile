@@ -114,7 +114,14 @@ build-frontend: ## Build the Portal production bundle
 	cd portal && npm run build
 
 .PHONY: verify
-verify: test typecheck-frontend test-sensitive-sinks ## Run the repository's offline quality gate
+verify: test typecheck-frontend test-sensitive-sinks test-eval-scripts ## Run the repository's offline quality gate
+
+.PHONY: test-eval-scripts
+test-eval-scripts: ## Run deterministic evaluation/reporting script tests
+	python3 scripts/test_run_agent_eval.py
+	python3 scripts/test_compare_agent_eval.py
+	python3 scripts/test_validate_rag_judgments.py
+	python3 scripts/test_gate_rag_experiment.py
 
 .PHONY: agent-eval-smoke
 agent-eval-smoke: ## Run a live Agent evaluation smoke suite (requires a running platform)
