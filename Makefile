@@ -120,8 +120,14 @@ verify: test typecheck-frontend test-sensitive-sinks test-eval-scripts ## Run th
 test-eval-scripts: ## Run deterministic evaluation/reporting script tests
 	python3 scripts/test_run_agent_eval.py
 	python3 scripts/test_compare_agent_eval.py
+	python3 scripts/test_generate_enterprise_eval_cases.py
+	python3 scripts/test_report_eval_dataset_coverage.py
+	python3 scripts/test_build_rag_judgment_template.py
+	python3 scripts/test_apply_rag_gold_labels.py
 	python3 scripts/test_validate_rag_judgments.py
 	python3 scripts/test_gate_rag_experiment.py
+	python3 scripts/test_check_agent_release_readiness.py
+	python3 scripts/test_report_agent_quality_metrics.py
 
 .PHONY: agent-eval-smoke
 agent-eval-smoke: ## Run a live Agent evaluation smoke suite (requires a running platform)

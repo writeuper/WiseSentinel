@@ -43,4 +43,4 @@ python3 scripts/gate_rag_experiment.py \
 
 ## 自动化验证
 
-`scripts/test_gate_rag_experiment.py` 覆盖：可比且不回退的通过路径、质量回退、金标不足和 provenance 不一致。`make verify` 现将 Agent Eval、对比、标注与门槛脚本的确定性测试纳入离线质量门禁。
+`scripts/test_gate_rag_experiment.py` 覆盖：可比且不回退的通过路径、质量回退、金标不足和 provenance 不一致。`make verify` 现将 Agent Eval、对比、数据集覆盖、双人标注、Gold 合并、发布就绪和质量报告脚本的确定性测试纳入离线质量门禁。
