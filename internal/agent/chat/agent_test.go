@@ -114,6 +114,15 @@ func TestChatRAGTopKExpandsExplicitRunbookQueries(t *testing.T) {
 	}
 }
 
+func TestShouldExpandRAGQuery(t *testing.T) {
+	if !shouldExpandRAGQuery("服务下线告警怎么处理？") {
+		t.Fatal("ambiguous procedural question should enable bounded expansion")
+	}
+	if shouldExpandRAGQuery("告警规则 CPUHigh") {
+		t.Fatal("precise keyword query should keep the single-query path")
+	}
+}
+
 func TestStreamErrorDataOnlyExposesKnownOverloadAsStructuredData(t *testing.T) {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(streamErrorData(apperr.ErrModelOverloaded, "fallback")), &payload); err != nil {

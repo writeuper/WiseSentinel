@@ -796,9 +796,10 @@ func (a *Agent) retrieveDocs(ctx context.Context, req *domain.ChatAgentRequest) 
 		tenantID = ctxkeys.TenantIDFrom(ctx)
 	}
 	decision, err := a.ragService.Route(ctx, &domain.RetrieveRequest{
-		TenantID: tenantID,
-		Query:    req.Query,
-		TopK:     chatRAGTopK(req.Query),
+		TenantID:             tenantID,
+		Query:                req.Query,
+		EnableQueryExpansion: shouldExpandRAGQuery(req.Query),
+		TopK:                 chatRAGTopK(req.Query),
 	})
 	if err != nil || decision == nil || decision.Response == nil {
 		errText := ""
@@ -828,6 +829,11 @@ func (a *Agent) retrieveDocs(ctx context.Context, req *domain.ChatAgentRequest) 
 	}
 
 	return documents, citations, ragStepSuccess, ""
+}
+
+func shouldExpandRAGQuery(query string) bool {
+	q := strings.TrimSpace(query)
+	return strings.ContainsAny(q, "？?!！") || strings.Contains(q, "怎么") || strings.Contains(q, "如何") || strings.Contains(q, "为什么") || strings.Contains(q, "什么是")
 }
 
 // retrieveExplicitRunbook executes the internal-docs tool synchronously for

@@ -57,13 +57,17 @@ type SessionService interface {
 
 // RetrieveRequest carries RAG retrieval parameters.
 type RetrieveRequest struct {
-	TenantID       string
-	Query          string
-	TopK           int
-	DocIDs         []string
-	MinScore       float64
-	MaxSecretLevel int // 0 = derive from caller roles; otherwise filter metadata secret_level
-	ExcludeSources []string
+	TenantID string
+	Query    string
+	// QueryVariants are additional, caller-supplied formulations of Query.
+	// They are bounded and always inherit the same tenant and metadata filters.
+	QueryVariants        []string
+	EnableQueryExpansion bool
+	TopK                 int
+	DocIDs               []string
+	MinScore             float64
+	MaxSecretLevel       int // 0 = derive from caller roles; otherwise filter metadata secret_level
+	ExcludeSources       []string
 }
 
 // KnowledgeLayer identifies which vector collection / knowledge tier a hit came from.
@@ -106,6 +110,8 @@ type RetrieveResponse struct {
 	Documents  []RetrievedDocument
 	Confidence ConfidenceLevel // 综合置信度，由最高分 + 层级权重决定
 	TopScore   float64         // 归一化后最高分，供编排层做路径决策
+	QueryCount int             // Number of bounded queries used for this retrieval.
+	Expanded   bool            // Whether query expansion contributed variants.
 }
 
 // DocumentIndexGeneration is the read-side publication state for one document.

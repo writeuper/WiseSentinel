@@ -49,9 +49,10 @@ func QueryInternalDocs(ctx context.Context, input json.RawMessage) (string, erro
 	}
 
 	resp, err := svc.Retrieve(ctx, &domain.RetrieveRequest{
-		TenantID: ctxkeys.TenantIDFrom(ctx),
-		Query:    req.Query,
-		TopK:     internalDocsTopK(req.Query),
+		TenantID:             ctxkeys.TenantIDFrom(ctx),
+		Query:                req.Query,
+		EnableQueryExpansion: true,
+		TopK:                 internalDocsTopK(req.Query),
 	})
 	if err != nil {
 		return "", fmt.Errorf("retrieve failed: %w", err)

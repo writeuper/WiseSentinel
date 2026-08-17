@@ -2,6 +2,8 @@ package rag
 
 import (
 	"context"
+	"sort"
+	"strings"
 	"time"
 	"wisesentinel-platform/internal/agent/knowledge"
 	"wisesentinel-platform/internal/domain"
@@ -20,10 +22,14 @@ import (
 // Service implements domain.RAGService.
 type Service struct {
 	pipeline  *knowledge.Pipeline
-	retriever *retriever.MilvusRetriever
+	retriever documentRetriever
 	indexer   *indexer.MilvusIndexer
 	tasks     *repository.IndexTaskRepo
 	states    *repository.DocumentIndexStateRepo
+}
+
+type documentRetriever interface {
+	Retrieve(context.Context, *domain.RetrieveRequest) (*domain.RetrieveResponse, error)
 }
 
 // NewService wires the RAG engine components.
@@ -65,7 +71,7 @@ func (s *Service) Retrieve(ctx context.Context, req *domain.RetrieveRequest) (*d
 		req = cloneRetrieveRequest(req)
 		req.MaxSecretLevel = domain.MaxSecretLevelForRoles(ctxkeys.RolesFrom(ctx))
 	}
-	resp, err := s.retriever.Retrieve(ctx, req)
+	resp, err := s.retrieveMulti(ctx, req)
 	if err != nil {
 		return nil, apperr.Wrap(err, apperr.ErrRAGFailed)
 	}
@@ -74,6 +80,50 @@ func (s *Service) Retrieve(ctx context.Context, req *domain.RetrieveRequest) (*d
 	if resp != nil {
 		confidence = string(resp.Confidence)
 	}
+	return resp, nil
+}
+
+func (s *Service) retrieveMulti(ctx context.Context, req *domain.RetrieveRequest) (*domain.RetrieveResponse, error) {
+	queries, expanded := buildRetrievalQueries(req)
+	if len(queries) == 0 {
+		return &domain.RetrieveResponse{Confidence: domain.ConfidenceLow}, nil
+	}
+	merged := make(map[string]domain.RetrievedDocument)
+	for _, query := range queries {
+		current := cloneRetrieveRequest(req)
+		current.Query = query
+		current.QueryVariants = nil
+		current.EnableQueryExpansion = false
+		resp, err := s.retriever.Retrieve(ctx, current)
+		if err != nil {
+			if strings.TrimSpace(query) == strings.TrimSpace(req.Query) {
+				return nil, err
+			}
+			continue
+		}
+		if resp == nil {
+			continue
+		}
+		for _, doc := range resp.Documents {
+			key := doc.ChunkID
+			if key == "" {
+				key = doc.DocID + "\x00" + doc.Source + "\x00" + doc.Content
+			}
+			if old, ok := merged[key]; !ok || doc.Score > old.Score {
+				merged[key] = doc
+			}
+		}
+	}
+	docs := make([]domain.RetrievedDocument, 0, len(merged))
+	for _, doc := range merged {
+		docs = append(docs, doc)
+	}
+	sort.SliceStable(docs, func(i, j int) bool { return docs[i].Score > docs[j].Score })
+	if req.TopK > 0 && len(docs) > req.TopK {
+		docs = docs[:req.TopK]
+	}
+	resp := &domain.RetrieveResponse{Documents: docs, QueryCount: len(queries), Expanded: expanded}
+	classifyRetrieveConfidence(resp)
 	return resp, nil
 }
 
