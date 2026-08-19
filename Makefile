@@ -127,6 +127,7 @@ test-eval-scripts: ## Run deterministic evaluation/reporting script tests
 	python3 scripts/test_validate_rag_judgments.py
 	python3 scripts/test_gate_rag_experiment.py
 	python3 scripts/test_check_agent_release_readiness.py
+	python3 scripts/test_run_real_eval.py
 	python3 scripts/test_report_agent_quality_metrics.py
 
 .PHONY: agent-eval-smoke
@@ -141,6 +142,10 @@ local-eval: ## Start the local stack and run a development-authenticated diagnos
 .PHONY: local-integration
 local-integration: ## Start the local stack and run MySQL/Redis/Milvus integration gates
 	bash scripts/run_local_integration.sh
+
+.PHONY: real-eval
+real-eval: ## Run three provider-backed, Gold-gated evaluation passes
+	bash scripts/run_real_eval.sh
 
 .PHONY: agent-load-chat
 agent-load-chat: ## Run cleanup-safe concurrent live Chat requests (requires a running platform)
