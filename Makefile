@@ -183,6 +183,10 @@ docker-build: ## Build the Docker image
 docker-up: ## Start all services with docker-compose
 	docker compose -f manifest/docker/docker-compose.yml up -d
 
+.PHONY: start-local-stack
+start-local-stack: ## Start local dependencies, migrations, platform and Prometheus
+	bash scripts/start_local_stack.sh
+
 .PHONY: migrate
 migrate: ## Apply idempotent MySQL migrations through the Compose migration job
 	docker compose -f manifest/docker/docker-compose.yml run --rm migrate

@@ -19,7 +19,7 @@ func TestIsPublicPathDoesNotExposeCurrentIdentity(t *testing.T) {
 }
 
 func TestIsPublicPathAllowsOnlyExplicitUnauthenticatedEndpoints(t *testing.T) {
-	for _, path := range []string{"/health/live", "/health/ready", "/metrics", "/api/v1/auth/token"} {
+	for _, path := range []string{"/health/live", "/health/ready", "/metrics", "/auth/token", "/api/v1/auth/token"} {
 		if !isPublicPath(path) {
 			t.Fatalf("expected %s to be public", path)
 		}

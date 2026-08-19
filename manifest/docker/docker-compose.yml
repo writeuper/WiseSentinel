@@ -123,6 +123,8 @@ services:
       context: ../..
       dockerfile: manifest/docker/Dockerfile
     container_name: wisesentinel-platform
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8090:8090"
     environment:
@@ -133,6 +135,12 @@ services:
       REDIS_ADDRESS: "redis:6379"
       MILVUS_ADDRESS: "milvus:19530"
       PROMETHEUS_URL: "http://prometheus:9090"
+      # Optional local/benchmark provider overrides. Compose substitutes these
+      # from the shell or .env; empty values preserve fail-closed readiness.
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_BASE_URL: "${LLM_BASE_URL:-}"
+      LLM_MODEL: "${LLM_MODEL:-}"
+      EMBED_API_KEY: "${EMBED_API_KEY:-}"
     depends_on:
       mysql:
         condition: service_healthy

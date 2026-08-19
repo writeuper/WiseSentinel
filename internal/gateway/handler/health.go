@@ -20,7 +20,11 @@ func RegisterHealth(s *ghttp.Server, app *bootstrap.App) {
 		components := app.Ready(r.Context())
 		ready := true
 		for name, status := range components {
-			if status != "up" && status != "skipped" && !(status == "degraded" && name == "rag") {
+			// Configured external data sources (Prometheus, logs, deployments)
+			// are validated by their own adapters at request time; they are not
+			// synchronous dependency probes. Treat configured as ready while
+			// preserving fail-closed status for databases, workers and models.
+			if status != "up" && status != "skipped" && status != "configured" && !(status == "degraded" && name == "rag") {
 				ready = false
 				break
 			}

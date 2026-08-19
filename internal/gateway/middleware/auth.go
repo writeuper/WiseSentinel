@@ -326,6 +326,10 @@ func isPublicPath(path string) bool {
 		"/health/live",
 		"/health/ready",
 		"/metrics",
+		// GoFrame passes the route-group-relative path to middleware. The
+		// versioned API group therefore sees /auth/token rather than its
+		// externally visible /api/v1/auth/token path.
+		"/auth/token",
 		"/api/v1/auth/token",
 	}
 	for _, p := range public {
