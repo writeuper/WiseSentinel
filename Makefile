@@ -138,6 +138,10 @@ agent-eval-smoke: ## Run a live Agent evaluation smoke suite (requires a running
 local-eval: ## Start the local stack and run a development-authenticated diagnostic eval
 	bash scripts/run_local_eval.sh
 
+.PHONY: local-integration
+local-integration: ## Start the local stack and run MySQL/Redis/Milvus integration gates
+	bash scripts/run_local_integration.sh
+
 .PHONY: agent-load-chat
 agent-load-chat: ## Run cleanup-safe concurrent live Chat requests (requires a running platform)
 	@test -n "$(EVAL_BASE_URL)" || (echo "EVAL_BASE_URL is required, e.g. http://127.0.0.1:8090/api/v1" && exit 2)
