@@ -8,7 +8,10 @@ ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 BASE_URL=${EVAL_BASE_URL:-http://127.0.0.1:8090/api/v1}
 USERNAME=${EVAL_USERNAME:-sre@example.com}
 PASSWORD=${EVAL_PASSWORD:-dev123}
-LIMIT=${EVAL_LIMIT:-1}
+# TIME-008 exercises authenticated HTTP, session cleanup, a successful local
+# MCP tool call, forbidden-tool checks and Trace retrieval without claiming a
+# real LLM benchmark. Callers can select another case explicitly.
+CASE_ID=${EVAL_CASE:-TIME-008}
 OUTPUT=${EVAL_OUTPUT:-/tmp/wisesentinel-local-eval.csv}
 SUMMARY=${EVAL_SUMMARY:-/tmp/wisesentinel-local-eval-summary.json}
 
@@ -27,7 +30,7 @@ python3 "$ROOT_DIR/scripts/run_agent_eval.py" \
   --base-url "$BASE_URL" \
   --bearer-token "$token" \
   --only chat \
-  --limit "$LIMIT" \
+  --case "$CASE_ID" \
   --allow-failures \
   --environment local \
   --run-label local-start-eval \
