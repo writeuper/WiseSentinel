@@ -36,6 +36,20 @@ var (
 	// represented as approved when no durable, idempotent execution workflow
 	// is configured for it.
 	ErrHighRiskWorkflowUnavailable = New(50303, 503, "高风险工具执行工作流尚未启用")
+	ErrToolNotFound                = New(40410, 404, "工具不存在")
+	ErrToolDisabled                = New(40310, 403, "工具已禁用")
+	ErrAgentToolDenied             = New(40311, 403, "Agent 无权使用该工具")
+	ErrAuthDenied                  = New(40110, 401, "工具认证失败")
+	ErrResourceDenied              = New(40312, 403, "资源访问被拒绝")
+	ErrSchemaInvalid               = New(42210, 422, "工具参数结构无效")
+	ErrArgumentMissing             = New(42211, 422, "工具参数缺失")
+	ErrArgumentOutOfRange          = New(42212, 422, "工具参数超出范围")
+	ErrToolDuplicate               = New(40910, 409, "重复的工具调用")
+	ErrToolBudgetExceeded          = New(42910, 429, "工具预算已耗尽")
+	ErrToolTimeout                 = New(50410, 504, "工具调用超时")
+	ErrToolUpstream                = New(50210, 502, "工具上游服务错误")
+	ErrApprovalRequired            = New(40313, 403, "工具调用需要审批")
+	ErrTaskCancelled               = New(40911, 409, "任务已取消")
 )
 
 func Wrap(err error, fallback *AppError) error {

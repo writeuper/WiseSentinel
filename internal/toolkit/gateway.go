@@ -4,7 +4,7 @@ package toolkit
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +30,8 @@ type Gateway struct {
 	tools      map[string]*domain.ToolMeta
 	adapters   map[string]AdapterFunc
 	recordRepo *repository.ToolCallRecordRepo
+	invMu      sync.Mutex
+	inFlight   map[string]time.Time
 }
 
 // NewGateway creates a ToolGateway from config and registered adapters.
@@ -37,6 +39,7 @@ func NewGateway(ctx context.Context) *Gateway {
 	gw := &Gateway{
 		tools:    make(map[string]*domain.ToolMeta),
 		adapters: make(map[string]AdapterFunc),
+		inFlight: make(map[string]time.Time),
 	}
 	gw.loadToolConfig(ctx)
 	gw.registerAdapters()
@@ -85,12 +88,17 @@ func (gw *Gateway) loadToolConfig(ctx context.Context) {
 		}
 
 		gw.tools[name] = &domain.ToolMeta{
-			Name:        name,
-			Description: gconv.String(toolMap["description"]),
-			RiskLevel:   rl,
-			TimeoutMS:   gconv.Int(toolMap["timeout_ms"]),
-			Agents:      agents,
-			Enabled:     enabled,
+			Name:             name,
+			Description:      gconv.String(toolMap["description"]),
+			RiskLevel:        rl,
+			TimeoutMS:        gconv.Int(toolMap["timeout_ms"]),
+			Agents:           agents,
+			Enabled:          enabled,
+			ResourceScope:    gconv.String(toolMap["resource_scope"]),
+			ApprovalRequired: gconv.Bool(toolMap["approval_required"]),
+		}
+		if schema, ok := toolMap["input_schema"].(map[string]interface{}); ok {
+			gw.tools[name].InputSchema = schema
 		}
 	}
 }
@@ -187,11 +195,30 @@ func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*
 
 	if !ok || !meta.Enabled {
 		observe("unavailable")
-		return nil, apperr.New(50003, 500, fmt.Sprintf("tool %q is not available", req.ToolName))
+		if !ok {
+			return nil, apperr.ErrToolNotFound
+		}
+		return nil, apperr.ErrToolDisabled
 	}
 	if !hasAdapter {
 		observe("unavailable")
-		return nil, apperr.New(50003, 500, fmt.Sprintf("tool %q has no adapter", req.ToolName))
+		return nil, apperr.ErrToolNotFound
+	}
+	if req.AgentType != "" && !agentInList(req.AgentType, meta.Agents) {
+		observe("rejected")
+		return nil, apperr.ErrAgentToolDenied
+	}
+	if allowed, bound := ctxkeys.AllowedToolsFrom(ctx); bound && !toolInList(req.ToolName, allowed) {
+		observe("rejected")
+		return nil, apperr.ErrAgentToolDenied
+	}
+	if meta.ApprovalRequired && req.ApprovalID == "" {
+		observe("rejected")
+		return nil, apperr.ErrApprovalRequired
+	}
+	if meta.ResourceScope != "" && req.ResourceScope != "" && meta.ResourceScope != req.ResourceScope {
+		observe("rejected")
+		return nil, apperr.ErrResourceDenied
 	}
 
 	// L2 writes require a durable execution intent: an immutable, protected
@@ -210,6 +237,40 @@ func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*
 	}
 
 	req.Input = completeToolInput(req.ToolName, req.Input, ctx)
+	if err := validateToolInput(meta.InputSchema, req.Input); err != nil {
+		observe("rejected")
+		return nil, err
+	}
+	if err := validateQueryTimeRange(ctx, req.ToolName, req.Input); err != nil {
+		observe("rejected")
+		return nil, err
+	}
+	taskID := req.TaskID
+	if taskID == "" {
+		taskID = ctxkeys.TaskIDFrom(ctx)
+	}
+	if taskID != "" {
+		tenantID := req.TenantID
+		if tenantID == "" {
+			tenantID = ctxkeys.TenantIDFrom(ctx)
+		}
+		fp := ToolCallFingerprint(tenantID, taskID, req.ToolName, req.Input, req.ResourceScope)
+		if !gw.reserveFingerprint(fp) {
+			observe("duplicate")
+			return nil, apperr.ErrToolDuplicate
+		}
+	}
+	if err := reserveToolBudget(ctx, req.ToolName); err != nil {
+		if taskID != "" {
+			tenantID := req.TenantID
+			if tenantID == "" {
+				tenantID = ctxkeys.TenantIDFrom(ctx)
+			}
+			gw.releaseFingerprint(ToolCallFingerprint(tenantID, taskID, req.ToolName, req.Input, req.ResourceScope))
+		}
+		observe("budget")
+		return nil, err
+	}
 	// region debug-point p1-tool-input
 	g.Log().Infof(ctx, "[p1-tool-input] tool=%s agent=%s input=%s", req.ToolName, req.AgentType, redact.TelemetryProjection(string(req.Input)))
 	// endregion debug-point p1-tool-input
@@ -237,12 +298,20 @@ func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*
 		respOutput = output
 	)
 	if err != nil {
+		if taskID != "" {
+			tenantID := req.TenantID
+			if tenantID == "" {
+				tenantID = ctxkeys.TenantIDFrom(ctx)
+			}
+			gw.releaseFingerprint(ToolCallFingerprint(tenantID, taskID, req.ToolName, req.Input, req.ResourceScope))
+		}
 		if ctxErr := callCtx.Err(); ctxErr != nil {
 			observe("timeout")
 		} else {
 			observe("error")
 		}
 	} else {
+		commitToolBudget(ctx, latency, len(respOutput))
 		observe("success")
 	}
 	if err != nil {
@@ -300,9 +369,33 @@ func (gw *Gateway) Invoke(ctx context.Context, req *domain.ToolInvokeRequest) (*
 		LatencyMS: int(latency),
 	}
 	if err != nil {
-		return response, err
+		if callCtx.Err() != nil {
+			return response, apperr.ErrToolTimeout
+		}
+		return response, apperr.ErrToolUpstream
 	}
 	return response, nil
+}
+
+func (gw *Gateway) reserveFingerprint(fp string) bool {
+	now := time.Now()
+	gw.invMu.Lock()
+	defer gw.invMu.Unlock()
+	for k, at := range gw.inFlight {
+		if now.Sub(at) > 2*time.Minute {
+			delete(gw.inFlight, k)
+		}
+	}
+	if _, exists := gw.inFlight[fp]; exists {
+		return false
+	}
+	gw.inFlight[fp] = now
+	return true
+}
+func (gw *Gateway) releaseFingerprint(fp string) {
+	gw.invMu.Lock()
+	delete(gw.inFlight, fp)
+	gw.invMu.Unlock()
 }
 
 // truncateJSON keeps evidence payloads small enough to fit in an LLM context
@@ -349,6 +442,15 @@ func (gw *Gateway) checkRiskLevel(ctx context.Context, riskLevel domain.ToolRisk
 func agentInList(agent domain.AgentType, list []domain.AgentType) bool {
 	for _, a := range list {
 		if a == agent {
+			return true
+		}
+	}
+	return false
+}
+
+func toolInList(tool string, list []string) bool {
+	for _, allowed := range list {
+		if strings.TrimSpace(allowed) == tool {
 			return true
 		}
 	}

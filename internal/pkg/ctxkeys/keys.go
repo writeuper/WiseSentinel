@@ -22,6 +22,10 @@ const (
 	RequestQuery       ctxKey = "request_query"
 	WebhookBody        ctxKey = "webhook_body"
 	TaskCompletionSink ctxKey = "task_completion_sink"
+	TaskID             ctxKey = "task_id"
+	ToolBudget         ctxKey = "tool_budget"
+	ToolBudgetState    ctxKey = "tool_budget_state"
+	AllowedTools       ctxKey = "allowed_tools"
 )
 
 // StepSinkFunc records one Agent trace step.
@@ -29,6 +33,38 @@ type StepSinkFunc func(stepType, stepName, input, output, status string, latency
 
 func WithTenantID(ctx context.Context, tenantID string) context.Context {
 	return context.WithValue(ctx, TenantID, tenantID)
+}
+
+func WithTaskID(ctx context.Context, taskID string) context.Context {
+	return context.WithValue(ctx, TaskID, taskID)
+}
+func TaskIDFrom(ctx context.Context) string { v, _ := ctx.Value(TaskID).(string); return v }
+func WithToolBudget(ctx context.Context, budget *domain.ToolBudget, state *domain.ToolBudgetState) context.Context {
+	if state != nil && state.ByTool == nil {
+		state.ByTool = make(map[string]int)
+	}
+	ctx = context.WithValue(ctx, ToolBudget, budget)
+	return context.WithValue(ctx, ToolBudgetState, state)
+}
+func ToolBudgetFrom(ctx context.Context) *domain.ToolBudget {
+	v, _ := ctx.Value(ToolBudget).(*domain.ToolBudget)
+	return v
+}
+func ToolBudgetStateFrom(ctx context.Context) *domain.ToolBudgetState {
+	v, _ := ctx.Value(ToolBudgetState).(*domain.ToolBudgetState)
+	return v
+}
+
+// WithAllowedTools binds the immutable task contract allowlist to tool
+// execution. A nil list means no contract was supplied; an empty list means
+// the task may not invoke any tool.
+func WithAllowedTools(ctx context.Context, tools []string) context.Context {
+	return context.WithValue(ctx, AllowedTools, append([]string(nil), tools...))
+}
+
+func AllowedToolsFrom(ctx context.Context) ([]string, bool) {
+	v, ok := ctx.Value(AllowedTools).([]string)
+	return v, ok
 }
 
 func TenantIDFrom(ctx context.Context) string {

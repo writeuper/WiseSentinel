@@ -230,7 +230,7 @@ func (a *Agent) newTaskContract(ctx context.Context, tenantID, userID, taskID, t
 	return domain.TaskContract{
 		TaskID: taskID, TenantID: tenantID, UserID: userID, Goal: req.Query,
 		AllowedTools: append(allowed, "task_complete"), CompletionCriteria: []string{"task_complete", "successful tool evidence", "all checklist items completed", "summary"},
-		RiskBudget: effectiveMaxIterations(a.maxIter, req), ConfigVersion: runtimeConfigVersion(req.RuntimeConfig), TraceID: traceID,
+		RiskBudget: effectiveMaxIterations(a.maxIter, req), ToolBudget: domain.DefaultToolBudget(effectiveMaxIterations(a.maxIter, req)), ConfigVersion: runtimeConfigVersion(req.RuntimeConfig), TraceID: traceID,
 	}, nil
 }
 
@@ -260,6 +260,20 @@ func (a *Agent) executeTask(ctx context.Context, tenantID, taskID, traceID, exec
 
 	var completion domain.TaskCompletion
 	ctx = ctxkeys.WithTaskCompletionSink(ctx, &completion)
+	ctx = ctxkeys.WithTaskID(ctx, taskID)
+	budget := domain.DefaultToolBudget(effectiveMaxIterations(a.maxIter, req))
+	ctx = ctxkeys.WithToolBudget(ctx, &budget, &domain.ToolBudgetState{})
+	// Bind the persisted immutable contract before any executor/model tool call.
+	// This prevents a runtime Agent configuration from widening the tool scope.
+	if task, getErr := a.taskRepo.Get(ctx, tenantID, taskID); getErr == nil && task != nil && strings.TrimSpace(task.TaskContractJSON) != "" {
+		var bound domain.TaskContract
+		if json.Unmarshal([]byte(task.TaskContractJSON), &bound) == nil {
+			ctx = ctxkeys.WithAllowedTools(ctx, bound.AllowedTools)
+			if bound.ToolBudget.MaxToolCalls > 0 {
+				ctx = ctxkeys.WithToolBudget(ctx, &bound.ToolBudget, ctxkeys.ToolBudgetStateFrom(ctx))
+			}
+		}
+	}
 	evidence, result, detail, iterations, err := a.runAgent(ctx, tenantID, req)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {

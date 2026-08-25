@@ -251,15 +251,14 @@ func (a *Agent) Invoke(ctx context.Context, req *domain.ChatAgentRequest) (*doma
 	ctx = ctxkeys.WithToolSink(ctx, &evidence)
 	var completion domain.TaskCompletion
 	ctx = ctxkeys.WithTaskCompletionSink(ctx, &completion)
+	// Each Chat turn is an independent task. Scope it by TraceID as well as
+	// session so an identical safe tool call in a later user turn is not
+	// mistaken for an in-flight duplicate from an earlier turn.
+	chatTaskID := "chat:" + req.SessionID + ":" + traceID
+	ctx = ctxkeys.WithTaskID(ctx, chatTaskID)
+	chatBudget := domain.DefaultToolBudget(runtimeMaxSteps(req.RuntimeConfig, maxStep))
+	ctx = ctxkeys.WithToolBudget(ctx, &chatBudget, &domain.ToolBudgetState{})
 	var chatContract *domain.TaskContract
-	if req.Options.EnableTools {
-		contract, contractErr := a.newChatTaskContract(ctx, req, traceID)
-		if contractErr != nil {
-			return nil, apperr.Wrap(contractErr, apperr.ErrAgentFailed)
-		}
-		chatContract = &contract
-		a.recordStep(ctx, traceID, req, "task_contract", "created", "", fmt.Sprintf("tools=%d budget=%d", len(contract.AllowedTools), contract.RiskBudget), "success", 0, "")
-	}
 	finishStatus := "success"
 	finishErr := ""
 	defer func() {
@@ -267,19 +266,55 @@ func (a *Agent) Invoke(ctx context.Context, req *domain.ChatAgentRequest) (*doma
 	}()
 
 	if isTimeConversionQuery(req.Query) {
+		if req.Options.EnableTools {
+			contract, contractErr := a.newChatTaskContract(ctx, req, traceID)
+			if contractErr != nil {
+				return nil, apperr.Wrap(contractErr, apperr.ErrAgentFailed)
+			}
+			contract.AllowedTools = ensureShortcutTool(contract.AllowedTools, "mcp_time_convert_time")
+			chatContract = &contract
+			ctx = ctxkeys.WithAllowedTools(ctx, contract.AllowedTools)
+			a.recordStep(ctx, traceID, req, "task_contract", "created", "", fmt.Sprintf("tools=%d budget=%d", len(contract.AllowedTools), contract.RiskBudget), "success", 0, "")
+		}
 		toolResult, err := a.timeConversionEvidence(ctx, req)
 		if err != nil {
 			return nil, apperr.Wrap(err, apperr.ErrAgentFailed)
 		}
 		answer := formatConvertedTimeAnswer(toolResult.Output)
+		if req.Options.EnableTools {
+			decision := a.validateShortcutCompletion(ctx, *chatContract, answer, evidence)
+			if !decision.Accepted {
+				finishStatus = "incomplete"
+				finishErr = decision.Reason
+				return nil, apperr.New(40011, 422, "chat task incomplete: "+decision.Reason)
+			}
+		}
 		return &domain.ChatAgentResponse{SessionID: req.SessionID, Answer: answer, ToolCalls: []domain.ToolCallSummary{{Tool: "mcp_time_convert_time", Status: toolResult.Status, LatencyMS: toolResult.LatencyMS}}, TraceID: traceID}, nil
 	}
 	if isCurrentTimeQuery(req.Query) {
+		if req.Options.EnableTools {
+			contract, contractErr := a.newChatTaskContract(ctx, req, traceID)
+			if contractErr != nil {
+				return nil, apperr.Wrap(contractErr, apperr.ErrAgentFailed)
+			}
+			contract.AllowedTools = ensureShortcutTool(contract.AllowedTools, "get_current_time")
+			chatContract = &contract
+			ctx = ctxkeys.WithAllowedTools(ctx, contract.AllowedTools)
+			a.recordStep(ctx, traceID, req, "task_contract", "created", "", fmt.Sprintf("tools=%d budget=%d", len(contract.AllowedTools), contract.RiskBudget), "success", 0, "")
+		}
 		toolResult, err := a.currentTimeEvidence(ctx, req)
 		if err != nil {
 			return nil, apperr.Wrap(err, apperr.ErrAgentFailed)
 		}
 		answer := formatCurrentTimeAnswer(toolResult.Output)
+		if req.Options.EnableTools {
+			decision := a.validateShortcutCompletion(ctx, *chatContract, answer, evidence)
+			if !decision.Accepted {
+				finishStatus = "incomplete"
+				finishErr = decision.Reason
+				return nil, apperr.New(40011, 422, "chat task incomplete: "+decision.Reason)
+			}
+		}
 		return &domain.ChatAgentResponse{SessionID: req.SessionID, Answer: answer, ToolCalls: []domain.ToolCallSummary{{Tool: "get_current_time", Status: toolResult.Status, LatencyMS: toolResult.LatencyMS}}, TraceID: traceID}, nil
 	}
 	if isPlatformRoleQuery(req.Query) {
@@ -290,6 +325,15 @@ func (a *Agent) Invoke(ctx context.Context, req *domain.ChatAgentRequest) (*doma
 	if answer, stepName, ok := platformCapabilityAnswer(req.Query); ok {
 		a.recordStep(ctx, traceID, req, "capability", stepName, req.Query, answer, "success", 0, "")
 		return &domain.ChatAgentResponse{SessionID: req.SessionID, Answer: answer, TraceID: traceID}, nil
+	}
+	if req.Options.EnableTools {
+		contract, contractErr := a.newChatTaskContract(ctx, req, traceID)
+		if contractErr != nil {
+			return nil, apperr.Wrap(contractErr, apperr.ErrAgentFailed)
+		}
+		chatContract = &contract
+		ctx = ctxkeys.WithAllowedTools(ctx, contract.AllowedTools)
+		a.recordStep(ctx, traceID, req, "task_contract", "created", "", fmt.Sprintf("tools=%d budget=%d", len(contract.AllowedTools), contract.RiskBudget), "success", 0, "")
 	}
 
 	// 1. Retrieve RAG documents and collect citations when enabled
@@ -402,18 +446,11 @@ func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domai
 		ctx = ctxkeys.WithToolSink(ctx, &evidence)
 		var completion domain.TaskCompletion
 		ctx = ctxkeys.WithTaskCompletionSink(ctx, &completion)
+		streamTaskID := "chat:" + req.SessionID + ":" + traceID
+		ctx = ctxkeys.WithTaskID(ctx, streamTaskID)
+		streamBudget := domain.DefaultToolBudget(maxStep)
+		ctx = ctxkeys.WithToolBudget(ctx, &streamBudget, &domain.ToolBudgetState{})
 		var chatContract *domain.TaskContract
-		if req.Options.EnableTools {
-			contract, contractErr := a.newChatTaskContract(ctx, req, traceID)
-			if contractErr != nil {
-				streamStatus = "failed"
-				streamErr = contractErr.Error()
-				r.send("error", "任务契约初始化失败，请稍后重试。")
-				return
-			}
-			chatContract = &contract
-			a.recordStep(ctx, traceID, req, "task_contract", "created", "", fmt.Sprintf("tools=%d budget=%d", len(contract.AllowedTools), contract.RiskBudget), "success", 0, "")
-		}
 
 		// Check if context is already cancelled.
 		select {
@@ -427,6 +464,19 @@ func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domai
 		r.send("connected", fmt.Sprintf(`{"status":"connected","session_id":"%s"}`, req.SessionID))
 
 		if isTimeConversionQuery(req.Query) {
+			if req.Options.EnableTools {
+				contract, contractErr := a.newChatTaskContract(ctx, req, traceID)
+				if contractErr != nil {
+					streamStatus = "failed"
+					streamErr = contractErr.Error()
+					r.send("error", "任务契约初始化失败，请稍后重试。")
+					return
+				}
+				contract.AllowedTools = ensureShortcutTool(contract.AllowedTools, "mcp_time_convert_time")
+				chatContract = &contract
+				ctx = ctxkeys.WithAllowedTools(ctx, contract.AllowedTools)
+				a.recordStep(ctx, traceID, req, "task_contract", "created", "", fmt.Sprintf("tools=%d budget=%d", len(contract.AllowedTools), contract.RiskBudget), "success", 0, "")
+			}
 			toolResult, toolErr := a.timeConversionEvidence(ctx, req)
 			if toolErr != nil {
 				streamStatus = "failed"
@@ -437,11 +487,34 @@ func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domai
 			}
 			toolPayload, _ := json.Marshal(map[string]any{"tool": "mcp_time_convert_time", "status": toolResult.Status, "latency_ms": toolResult.LatencyMS, "output": toolResult.Output})
 			r.send("tool", string(toolPayload))
-			r.send("message", formatConvertedTimeAnswer(toolResult.Output))
+			answer := formatConvertedTimeAnswer(toolResult.Output)
+			r.send("message", answer)
+			if req.Options.EnableTools {
+				decision := a.validateShortcutCompletion(ctx, *chatContract, answer, evidence)
+				if !decision.Accepted {
+					streamStatus = "incomplete"
+					streamErr = decision.Reason
+					r.send("error", "任务未满足完成条件："+decision.Reason)
+					return
+				}
+			}
 			r.send("done", fmt.Sprintf(`{"trace_id":"%s"}`, traceID))
 			return
 		}
 		if isCurrentTimeQuery(req.Query) {
+			if req.Options.EnableTools {
+				contract, contractErr := a.newChatTaskContract(ctx, req, traceID)
+				if contractErr != nil {
+					streamStatus = "failed"
+					streamErr = contractErr.Error()
+					r.send("error", "任务契约初始化失败，请稍后重试。")
+					return
+				}
+				contract.AllowedTools = ensureShortcutTool(contract.AllowedTools, "get_current_time")
+				chatContract = &contract
+				ctx = ctxkeys.WithAllowedTools(ctx, contract.AllowedTools)
+				a.recordStep(ctx, traceID, req, "task_contract", "created", "", fmt.Sprintf("tools=%d budget=%d", len(contract.AllowedTools), contract.RiskBudget), "success", 0, "")
+			}
 			toolResult, toolErr := a.currentTimeEvidence(ctx, req)
 			if toolErr != nil {
 				streamStatus = "failed"
@@ -460,6 +533,15 @@ func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domai
 			r.send("tool", string(toolPayload))
 			answer := formatCurrentTimeAnswer(toolResult.Output)
 			r.send("message", answer)
+			if req.Options.EnableTools {
+				decision := a.validateShortcutCompletion(ctx, *chatContract, answer, evidence)
+				if !decision.Accepted {
+					streamStatus = "incomplete"
+					streamErr = decision.Reason
+					r.send("error", "任务未满足完成条件："+decision.Reason)
+					return
+				}
+			}
 			r.send("done", fmt.Sprintf(`{"trace_id":"%s"}`, traceID))
 			return
 		}
@@ -475,6 +557,18 @@ func (a *Agent) Stream(ctx context.Context, req *domain.ChatAgentRequest) (domai
 			r.send("message", answer)
 			r.send("done", fmt.Sprintf(`{"trace_id":"%s"}`, traceID))
 			return
+		}
+		if req.Options.EnableTools {
+			contract, contractErr := a.newChatTaskContract(ctx, req, traceID)
+			if contractErr != nil {
+				streamStatus = "failed"
+				streamErr = contractErr.Error()
+				r.send("error", "任务契约初始化失败，请稍后重试。")
+				return
+			}
+			chatContract = &contract
+			ctx = ctxkeys.WithAllowedTools(ctx, contract.AllowedTools)
+			a.recordStep(ctx, traceID, req, "task_contract", "created", "", fmt.Sprintf("tools=%d budget=%d", len(contract.AllowedTools), contract.RiskBudget), "success", 0, "")
 		}
 
 		// 1. Retrieve RAG docs. Citations are emitted before model text so the
@@ -734,7 +828,17 @@ func (a *Agent) newChatTaskContract(ctx context.Context, req *domain.ChatAgentRe
 			allowed = append(allowed, meta.Name)
 		}
 	}
-	return domain.TaskContract{TaskID: "chat:" + req.SessionID, TenantID: tenantID, UserID: req.UserID, Goal: req.Query, AllowedTools: allowed, CompletionCriteria: []string{"task_complete", "successful tool or citation evidence"}, RiskBudget: runtimeMaxSteps(req.RuntimeConfig, maxStep), ConfigVersion: runtimeConfigVersion(req.RuntimeConfig), TraceID: traceID}, nil
+	riskBudget := runtimeMaxSteps(req.RuntimeConfig, maxStep)
+	return domain.TaskContract{TaskID: "chat:" + req.SessionID + ":" + traceID, TenantID: tenantID, UserID: req.UserID, Goal: req.Query, AllowedTools: allowed, CompletionCriteria: []string{"task_complete", "successful tool or citation evidence"}, RiskBudget: riskBudget, ToolBudget: domain.DefaultToolBudget(riskBudget), ConfigVersion: runtimeConfigVersion(req.RuntimeConfig), TraceID: traceID}, nil
+}
+
+func ensureShortcutTool(allowed []string, toolName string) []string {
+	for _, name := range allowed {
+		if name == toolName {
+			return allowed
+		}
+	}
+	return append(allowed, toolName)
 }
 
 func citationEvidence(citations []domain.Citation) []domain.Evidence {

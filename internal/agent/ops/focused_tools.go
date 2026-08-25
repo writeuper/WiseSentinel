@@ -68,6 +68,7 @@ func (a *Agent) runFocusedTool(ctx context.Context, tenantID, query string) ([]d
 	ctx = ctxkeys.WithRequestQuery(ctx, query)
 	var details []string
 	var outputs []string
+	var firstErr error
 	for _, request := range requests {
 		resp, err := a.toolGateway.Invoke(ctx, &domain.ToolInvokeRequest{
 			TenantID:  tenantID,
@@ -78,6 +79,9 @@ func (a *Agent) runFocusedTool(ctx context.Context, tenantID, query string) ([]d
 			AgentType: domain.AgentTypeOps,
 		})
 		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
 			details = append(details, fmt.Sprintf("[focused] %s: %v", request.name, err))
 			continue
 		}
@@ -85,6 +89,9 @@ func (a *Agent) runFocusedTool(ctx context.Context, tenantID, query string) ([]d
 		outputs = append(outputs, fmt.Sprintf("%s=%s", request.name, resp.Output))
 	}
 	if len(outputs) == 0 {
+		if firstErr != nil {
+			return evidence, "", details, true, firstErr
+		}
 		return evidence, "", details, true, fmt.Errorf("focused tools failed")
 	}
 	result := fmt.Sprintf("已调用工具。\n工具结果：%s\n\n%s", strings.Join(outputs, "\n"), focusedConclusion(query, strings.Join(outputs, "\n")))

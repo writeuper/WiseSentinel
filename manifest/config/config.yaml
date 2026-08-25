@@ -140,6 +140,11 @@ tools:
     timeout_ms: 10000
     agents: [ops]
     description: "按 PromQL 查询指定时间区间的指标曲线，如错误率、延迟、CPU、内存。入参：query(必填PromQL)、start、end、step"
+    input_schema:
+      required: [query]
+      properties:
+        query: {type: string}
+        limit: {type: integer, minimum: 1, maximum: 120}
   - name: query_internal_docs
     risk_level: L0
     approval_required: false
@@ -168,6 +173,12 @@ tools:
     timeout_ms: 10000
     agents: [chat, ops]
     description: "通过标准 MCP time server 转换时区；入参 source_timezone、time、target_timezone"
+    input_schema:
+      required: [source_timezone, time, target_timezone]
+      properties:
+        source_timezone: {type: string}
+        time: {type: string}
+        target_timezone: {type: string}
   - name: query_logs
     risk_level: L1
     approval_required: false
@@ -175,6 +186,12 @@ tools:
     timeout_ms: 30000
     agents: [ops]
     description: "通过 MCP 按关键词查询日志"
+    resource_scope: "tenant_logs"
+    input_schema:
+      required: [query]
+      properties:
+        query: {type: string}
+        limit: {type: integer, minimum: 1, maximum: 100}
   - name: search_logs
     risk_level: L0
     approval_required: false
@@ -182,6 +199,11 @@ tools:
     timeout_ms: 5000
     agents: [ops]
     description: "从本地 mock 日志中按关键词检索故障日志。入参：query(必填)、service、level、limit"
+    input_schema:
+      required: [query]
+      properties:
+        query: {type: string}
+        limit: {type: integer, minimum: 1, maximum: 100}
   - name: query_logs_by_trace
     risk_level: L1
     approval_required: false
@@ -189,6 +211,12 @@ tools:
     timeout_ms: 30000
     agents: [ops]
     description: "按 TraceID 检索分布式链路日志，定位慢调用和错误节点。入参：trace_id(必填)、service、limit"
+    resource_scope: "tenant_logs"
+    input_schema:
+      required: [trace_id]
+      properties:
+        trace_id: {type: string}
+        limit: {type: integer, minimum: 1, maximum: 100}
   - name: query_deployments
     risk_level: L1
     approval_required: false
@@ -196,6 +224,13 @@ tools:
     timeout_ms: 10000
     agents: [ops]
     description: "查询指定服务近期发布、灰度、回滚记录。入参：service(必填)、env、hours、limit"
+    resource_scope: "tenant_deployments"
+    input_schema:
+      required: [service]
+      properties:
+        service: {type: string}
+        hours: {type: integer, minimum: 1, maximum: 168}
+        limit: {type: integer, minimum: 1, maximum: 100}
 
 deployment:
   base_url: "local_mock"

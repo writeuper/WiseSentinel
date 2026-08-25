@@ -8,17 +8,25 @@ import (
 // intentionally data-only so it can be persisted with the task and replayed
 // by a worker without trusting a fresh model decision.
 type TaskContract struct {
-	TaskID             string   `json:"task_id"`
-	TenantID           string   `json:"tenant_id"`
-	UserID             string   `json:"user_id"`
-	Goal               string   `json:"goal"`
-	AllowedTools       []string `json:"allowed_tools,omitempty"`
-	AllowedResources   []string `json:"allowed_resources,omitempty"`
-	ForbiddenActions   []string `json:"forbidden_actions,omitempty"`
-	CompletionCriteria []string `json:"completion_criteria"`
-	RiskBudget         int      `json:"risk_budget"`
-	ConfigVersion      string   `json:"config_version,omitempty"`
-	TraceID            string   `json:"trace_id"`
+	TaskID             string     `json:"task_id"`
+	TenantID           string     `json:"tenant_id"`
+	UserID             string     `json:"user_id"`
+	Goal               string     `json:"goal"`
+	AllowedTools       []string   `json:"allowed_tools,omitempty"`
+	AllowedResources   []string   `json:"allowed_resources,omitempty"`
+	ForbiddenActions   []string   `json:"forbidden_actions,omitempty"`
+	CompletionCriteria []string   `json:"completion_criteria"`
+	RiskBudget         int        `json:"risk_budget"`
+	ToolBudget         ToolBudget `json:"tool_budget"`
+	ConfigVersion      string     `json:"config_version,omitempty"`
+	TraceID            string     `json:"trace_id"`
+}
+
+func DefaultToolBudget(stepBudget int) ToolBudget {
+	if stepBudget <= 0 {
+		stepBudget = 8
+	}
+	return ToolBudget{MaxToolCalls: stepBudget, MaxSameToolCalls: 2, MaxTotalToolLatencyMS: 60_000, MaxResponseBytes: 1_000_000, MaxQueryTimeRangeMS: 86_400_000, MaxRetryCount: 2}
 }
 
 // TaskCompletion is the runtime's explicit completion proposal.  Today it is

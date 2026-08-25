@@ -11,6 +11,7 @@ import (
 
 	"wisesentinel-platform/internal/domain"
 	"wisesentinel-platform/internal/pkg/apperr"
+	"wisesentinel-platform/internal/pkg/ctxkeys"
 )
 
 func TestIsModelOverloadedErrorRecognizesTypedAndEinoFormattedError(t *testing.T) {
@@ -137,7 +138,8 @@ func TestStreamErrorDataOnlyExposesKnownOverloadAsStructuredData(t *testing.T) {
 }
 
 type currentTimeToolGateway struct {
-	output string
+	output         string
+	recordEvidence bool
 }
 
 type retrievalTestRAG struct {
@@ -241,10 +243,15 @@ func TestChatStreamReaderBackpressurePreservesAllEvents(t *testing.T) {
 }
 
 func (g *currentTimeToolGateway) ListTools(context.Context, string, domain.AgentType) ([]domain.ToolMeta, error) {
-	return nil, nil
+	return []domain.ToolMeta{{Name: "get_current_time"}}, nil
 }
 
-func (g *currentTimeToolGateway) Invoke(context.Context, *domain.ToolInvokeRequest) (*domain.ToolInvokeResponse, error) {
+func (g *currentTimeToolGateway) Invoke(ctx context.Context, request *domain.ToolInvokeRequest) (*domain.ToolInvokeResponse, error) {
+	if g.recordEvidence {
+		if sink := ctxkeys.ToolSinkFrom(ctx); sink != nil {
+			*sink = append(*sink, domain.Evidence{ToolName: request.ToolName, Status: "success"})
+		}
+	}
 	return &domain.ToolInvokeResponse{Output: g.output, Status: "success", LatencyMS: 1}, nil
 }
 
@@ -275,16 +282,55 @@ func TestInvokeCurrentTimeReturnsNaturalLanguageAnswer(t *testing.T) {
 	}
 }
 
+func TestInvokeCurrentTimeWithToolsRequiresRecordedEvidenceAndCompletion(t *testing.T) {
+	output := `{"time":"2026-07-29 15:00:00","timezone":"Asia/Shanghai","rfc3339":"2026-07-29T07:00:00Z"}`
+	request := &domain.ChatAgentRequest{SessionID: "session-1", Query: "现在几点", Options: domain.ChatOptions{EnableTools: true}}
+
+	withoutEvidence := NewAgent(nil, nil, &currentTimeToolGateway{output: output})
+	if _, err := withoutEvidence.Invoke(context.Background(), request); err == nil {
+		t.Fatal("shortcut must not succeed when the tool gateway did not record evidence")
+	}
+
+	withEvidence := NewAgent(nil, nil, &currentTimeToolGateway{output: output, recordEvidence: true})
+	response, err := withEvidence.Invoke(context.Background(), request)
+	if err != nil {
+		t.Fatalf("shortcut with recorded evidence failed: %v", err)
+	}
+	if response == nil || !strings.Contains(response.Answer, "当前北京时间") {
+		t.Fatalf("response = %#v, want formatted completed response", response)
+	}
+}
+
+func TestInvokeTimeConversionWithToolsUsesDedicatedAllowedTool(t *testing.T) {
+	output := `{"source_timezone":"Asia/Shanghai","target_timezone":"UTC","source_time":"2026-07-29 15:00:00","time":"2026-07-29 07:00:00","rfc3339":"2026-07-29T07:00:00Z"}`
+	request := &domain.ChatAgentRequest{SessionID: "session-1", Query: "把当前时间转换为 UTC", Options: domain.ChatOptions{EnableTools: true}}
+
+	withoutEvidence := NewAgent(nil, nil, &currentTimeToolGateway{output: output})
+	if _, err := withoutEvidence.Invoke(context.Background(), request); err == nil {
+		t.Fatal("conversion shortcut must not succeed when the tool gateway did not record evidence")
+	}
+
+	withEvidence := NewAgent(nil, nil, &currentTimeToolGateway{output: output, recordEvidence: true})
+	response, err := withEvidence.Invoke(context.Background(), request)
+	if err != nil {
+		t.Fatalf("conversion shortcut with recorded evidence failed: %v", err)
+	}
+	if response == nil || len(response.ToolCalls) != 1 || response.ToolCalls[0].Tool != "mcp_time_convert_time" {
+		t.Fatalf("response = %#v, want conversion tool result", response)
+	}
+}
+
 func TestStreamCurrentTimeKeepsToolOutputAndFormatsMessage(t *testing.T) {
 	toolOutput := `{"time":"2026-07-29 15:00:00","timezone":"Asia/Shanghai","rfc3339":"2026-07-29T07:00:00Z"}`
-	agent := NewAgent(nil, nil, &currentTimeToolGateway{output: toolOutput})
-	reader, err := agent.Stream(context.Background(), &domain.ChatAgentRequest{SessionID: "session-1", Query: "北京时间"})
+	agent := NewAgent(nil, nil, &currentTimeToolGateway{output: toolOutput, recordEvidence: true})
+	reader, err := agent.Stream(context.Background(), &domain.ChatAgentRequest{SessionID: "session-1", Query: "北京时间", Options: domain.ChatOptions{EnableTools: true}})
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer reader.Close()
 
 	var toolData, message string
+	var done bool
 	for {
 		event, data, ok := reader.Next()
 		if !ok {
@@ -295,6 +341,8 @@ func TestStreamCurrentTimeKeepsToolOutputAndFormatsMessage(t *testing.T) {
 			toolData = data
 		case "message":
 			message = data
+		case "done":
+			done = true
 		}
 	}
 	if !strings.Contains(toolData, strings.ReplaceAll(toolOutput, `"`, `\"`)) {
@@ -302,5 +350,39 @@ func TestStreamCurrentTimeKeepsToolOutputAndFormatsMessage(t *testing.T) {
 	}
 	if !strings.Contains(message, "当前北京时间（Asia/Shanghai）：2026-07-29 15:00:00") || !strings.Contains(message, "最近30分钟") || !strings.Contains(message, "证据来源：local") {
 		t.Fatalf("unexpected message: %q", message)
+	}
+	if !done {
+		t.Fatal("completed shortcut must emit done after completion validation")
+	}
+}
+
+func TestStreamCurrentTimeWithToolsRejectsMissingEvidence(t *testing.T) {
+	toolOutput := `{"time":"2026-07-29 15:00:00","timezone":"Asia/Shanghai","rfc3339":"2026-07-29T07:00:00Z"}`
+	agent := NewAgent(nil, nil, &currentTimeToolGateway{output: toolOutput})
+	reader, err := agent.Stream(context.Background(), &domain.ChatAgentRequest{SessionID: "session-1", Query: "北京时间", Options: domain.ChatOptions{EnableTools: true}})
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer reader.Close()
+
+	var errData string
+	var done bool
+	for {
+		event, data, ok := reader.Next()
+		if !ok {
+			break
+		}
+		if event == "error" {
+			errData = data
+		}
+		if event == "done" {
+			done = true
+		}
+	}
+	if !strings.Contains(errData, domain.CompletionToolMissing) {
+		t.Fatalf("error = %q, want completion reason %q", errData, domain.CompletionToolMissing)
+	}
+	if done {
+		t.Fatal("rejected shortcut must not emit a clean done event")
 	}
 }

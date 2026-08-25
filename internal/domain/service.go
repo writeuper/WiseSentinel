@@ -174,6 +174,30 @@ type ToolMeta struct {
 	TimeoutMS   int
 	Agents      []AgentType
 	Enabled     bool
+	// InputSchema is a deliberately small JSON-schema subset used at the
+	// model/tool boundary (required, properties.type, enum, minimum/maximum).
+	InputSchema      map[string]any
+	ResourceScope    string
+	ApprovalRequired bool
+}
+
+// ToolBudget limits one task's tool execution. A nil budget means unlimited
+// for backward compatibility with callers that do not create a TaskContract.
+type ToolBudget struct {
+	MaxToolCalls          int
+	MaxSameToolCalls      int
+	MaxTotalToolLatencyMS int64
+	MaxResponseBytes      int64
+	MaxQueryTimeRangeMS   int64
+	MaxRetryCount         int
+}
+
+type ToolBudgetState struct {
+	Calls         int
+	ByTool        map[string]int
+	LatencyMS     int64
+	ResponseBytes int64
+	Retries       int
 }
 
 // ToolInvokeRequest is a tool call from an agent.
@@ -184,10 +208,12 @@ type ToolInvokeRequest struct {
 	// ApprovalID is the durable approval reference bound to this invocation.
 	// It is optional for read-only tools and must never be inferred from a
 	// request payload or a UI decision.
-	ApprovalID string
-	ToolName   string
-	Input      json.RawMessage
-	AgentType  AgentType
+	ApprovalID    string
+	ToolName      string
+	Input         json.RawMessage
+	AgentType     AgentType
+	TaskID        string
+	ResourceScope string
 }
 
 // ToolInvokeResponse is the result of a tool call.
